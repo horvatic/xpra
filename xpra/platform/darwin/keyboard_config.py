@@ -12,6 +12,9 @@ log = Logger("keyboard", "osx")
 
 class KeyboardConfig(KeyboardConfigBase):
 
+    def __init__(self):
+        KeyboardConfigBase.__init__(self)
+
     def __repr__(self):
         return "osx.KeyboardConfig"
 
@@ -20,13 +23,12 @@ class KeyboardConfig(KeyboardConfigBase):
         return []
 
 
-    def do_get_keycode(self, client_keycode, keyname, pressed, modifiers, keyval, keystr, group):
+    def do_get_keycode(self, client_keycode, keyname, pressed, modifiers, keystr, group):
         global KEYCODES
         keycode = KEYCODES.get(keyname, -1)
         if keycode==-1:
             keycode = KEYCODES.get(keyname.upper(), -1)
-        log("get_keycode%s=%s, %s",
-            (client_keycode, keyname, pressed, modifiers, keyval, keystr, group), keycode, group)
+        log("get_keycode%s=%s, %s", (client_keycode, keyname, pressed, modifiers, keystr, group), keycode, group)
         return keycode, group
 
 #we currently assume that all key events are sent using X11 names,
@@ -72,6 +74,8 @@ KEYCODES = {
             "0"     : 29,
             "minus" : 27,
             "plus"  : 69,       #KeypadPlus
+            "equal" : 24,
+            "equal" : 24,
             "bracketleft"   : 33,
             "bracketright"  : 30,
             "semicolon"     : 41,
@@ -99,7 +103,6 @@ KEYCODES = {
             "KP_9"  : 92,
             "KP_0"  : 82,
             "KP_Decimal"    : 65,
-            #"equal" : 24,
             "equal"         : 81,
             "KP_Divide"     : 75,
             "KP_Multiply"   : 67,

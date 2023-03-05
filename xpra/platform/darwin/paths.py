@@ -23,12 +23,15 @@ def do_get_resources_dir():
     #FUGLY warning: importing gtkosx_application causes the dock to appear,
     #and in some cases we don't want that.. so use the env var XPRA_SKIP_UI as workaround for such cases:
     if not envbool("XPRA_SKIP_UI", False):
-        from xpra.platform.darwin import get_OSXApplication
-        macapp = get_OSXApplication()
         try:
-            rsc = macapp.get_resource_path()
-            debug("get_resources_dir() %s.get_resource_path=%s", macapp, rsc)
-        except Exception:
+            from gi.repository import GtkosxApplication
+            try:
+                rsc = GtkosxApplication.gtkosx_application_get_resource_path()
+                debug("get_resources_dir() gtkosx_application_get_resource_path=%s", rsc)
+            except:
+                #maybe we're not running from an app bundle?
+                pass
+        except:
             global _gtkosx_warning_
             if _gtkosx_warning_ is False:
                 _gtkosx_warning_ = True
@@ -87,7 +90,7 @@ def do_get_system_conf_dirs():
         for x in sdirs:
             #ie: "/Library/Application Support/Xpra"
             dirs.append(os.path.join(x, "Xpra"))
-    except Exception:
+    except:
         #fallback to hardcoded:
         default_conf_dir = "/Library/Application Support/Xpra"
         dirs = [os.environ.get("XPRA_SYSCONF_DIR", default_conf_dir)]
@@ -103,14 +106,11 @@ def do_get_user_conf_dirs(_uid):
     try:
         #when running sandboxed, it may look like this:
         #~/Library/Containers/<bundle_id>/Data/Library/Application Support/
-        from Foundation import (
-            NSSearchPathForDirectoriesInDomains,                #@UnresolvedImport
-            NSApplicationSupportDirectory, NSUserDomainMask,    #@UnresolvedImport
-            )
+        from Foundation import  NSSearchPathForDirectoriesInDomains, NSApplicationSupportDirectory, NSUserDomainMask    #@UnresolvedImport
         udirs = NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, False)
         for x in udirs:
             dirs.append(os.path.join(x, "Xpra"))
-    except Exception:
+    except:
         #fallback to hardcoded:
         dirs = ["/Library/Application Support/Xpra"]
     dirs.append("~/.xpra")
@@ -120,26 +120,19 @@ def do_get_default_log_dirs():
     dirs = []
     try:
         from Foundation import (
-            NSSearchPathForDirectoriesInDomains,    #@UnresolvedImport
-            NSLibraryDirectory, NSUserDomainMask,   #@UnresolvedImport
+            NSSearchPathForDirectoriesInDomains, NSLibraryDirectory, NSUserDomainMask,  #@UnresolvedImport
             )
         udirs = NSSearchPathForDirectoriesInDomains(NSLibraryDirectory, NSUserDomainMask, False)
         for x in udirs:
             #ie: ~/Library/
             dirs.append(os.path.join(x, "Logs", "Xpra"))
-    except Exception:
+    except:
         dirs.append("~/Library/Logs/Xpra")
-    import tempfile
-    dirs.append(tempfile.gettempdir())
+    dirs.append("/tmp")
     return dirs
 
 def do_get_socket_dirs():
-    #return ["/var/tmp/%s-Xpra" % os.getuid(), "~/.xpra"]
-    import tempfile
-    return [tempfile.gettempdir(), "~/.xpra"]
-
-def do_get_client_socket_dirs():
-    return ["~/.xpra/clients"]
+    return ["/var/tmp/%s-Xpra" % os.getuid(), "~/.xpra"]
 
 
 def do_get_download_dir():
@@ -150,7 +143,7 @@ def do_get_download_dir():
             )
         d = NSSearchPathForDirectoriesInDomains(NSDownloadsDirectory, NSUserDomainMask, False)[0]
         #(should be "~/Downloads")
-    except Exception:
+    except:
         pass
     if not os.path.exists(os.path.expanduser(d)):
         return "~"
@@ -162,6 +155,13 @@ def do_get_desktop_background_paths():
         "/System/Library/CoreServices/DefaultDesktop.jpg",
         "/Library/Desktop Pictures/*jpg",
         ]
+
+
+def do_get_libexec_dir():
+    from xpra.platform.paths import get_app_dir
+    base = get_app_dir()
+    p = os.path.join(base, "Helpers")
+    return p
 
 
 def do_get_sshpass_command():
@@ -183,13 +183,6 @@ def do_get_xpra_command():
         return [xpra_cmd]
     return ["xpra"]
 
-
-def _get_helpers_dir():
-    from xpra.platform.paths import get_app_dir
-    base = get_app_dir()
-    p = os.path.join(base, "Helpers")
-    return p
-
 def do_get_nodock_command():
     #try to use the subapp:
     from xpra.platform.paths import get_app_dir
@@ -200,7 +193,7 @@ def do_get_nodock_command():
     #appstore builds have script wrappers:
     helper = os.path.join(base, "Resources", "scripts", "Xpra")
     if not os.path.exists(helper):
-        helper = os.path.join(_get_helpers_dir(), "Xpra")
+        helper = os.path.join(base, "Helpers", "Xpra")
     if not os.path.exists(helper):
         #having a dock is still better than
         #trying to run a command that does not exist!
@@ -210,10 +203,3 @@ def do_get_nodock_command():
 
 def do_get_sound_command():
     return do_get_nodock_command()
-
-
-def do_get_python_exec_command():
-    return [os.path.join(_get_helpers_dir(), "Python"), "-c"]
-
-def do_get_python_execfile_command():
-    return [os.path.join(_get_helpers_dir(), "Python")]

@@ -1,35 +1,36 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 # This file is part of Xpra.
-# Copyright (C) 2014-2020 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2014-2019 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
 import os.path
 import sys
 import time
-from gi.repository import Gtk, Gdk  # @UnresolvedImport
 
+from xpra.gtk_common.gobject_compat import import_gtk, import_gdk, import_pango, is_gtk3
 from xpra.gtk_common.gtk_util import (
-    add_close_accel, scaled_image, get_icon_pixbuf,
-    get_display_info, get_default_root_window,
+    window_defaults, gtk_main, add_close_accel, scaled_image,
+    pixbuf_new_from_file, get_display_info, get_default_root_window,
     choose_file, get_gtk_version_info,
+    JUSTIFY_LEFT, WIN_POS_CENTER, FILE_CHOOSER_ACTION_SAVE,
     )
-from xpra.os_util import hexstr
+from xpra.platform.gui import force_focus
 from xpra.platform.gui import force_focus
 from xpra.util import nonl, envint, repr_ellipsized
-from xpra.common import FULL_INFO
+from xpra.os_util import strtobytes, hexstr, PYTHON3
 from xpra.log import Logger
 
 log = Logger("util")
 
+gtk = import_gtk()
+gdk = import_gdk()
+pango = import_pango()
+
 STEP_DELAY = envint("XPRA_BUG_REPORT_STEP_DELAY", 0)
 
 
-class BugReport:
-
-    def __init__(self):
-        self.checkboxes = {}
-        self.server_log = None
+class BugReport(object):
 
     def init(self, show_about=True, get_server_info=None, opengl_info=None, includes=None):
         self.show_about = show_about
@@ -39,63 +40,67 @@ class BugReport:
         self.setup_window()
 
     def setup_window(self):
-        self.window = Gtk.Window()
-        self.window.set_border_width(20)
+        self.window = gtk.Window()
+        window_defaults(self.window)
         self.window.connect("delete-event", self.close)
         self.window.set_default_size(400, 300)
         self.window.set_title("Xpra Bug Report")
 
-        icon_pixbuf = get_icon_pixbuf("bugs.png")
+        icon_pixbuf = self.get_icon("bugs.png")
         if icon_pixbuf:
             self.window.set_icon(icon_pixbuf)
-        self.window.set_position(Gtk.WindowPosition.CENTER)
+        self.window.set_position(WIN_POS_CENTER)
 
-        vbox = Gtk.VBox(homogeneous=False, spacing=0)
+        vbox = gtk.VBox(False, 0)
         vbox.set_spacing(15)
 
         # Title
-        hbox = Gtk.HBox(homogeneous=False, spacing=0)
-        icon_pixbuf = get_icon_pixbuf("xpra.png")
+        hbox = gtk.HBox(False, 0)
+        icon_pixbuf = self.get_icon("xpra.png")
         if icon_pixbuf and self.show_about:
             from xpra.gtk_common.about import about
-            logo_button = Gtk.Button("")
+            logo_button = gtk.Button("")
             settings = logo_button.get_settings()
             settings.set_property('gtk-button-images', True)
             logo_button.connect("clicked", about)
             logo_button.set_tooltip_text("About")
-            image = Gtk.Image()
+            image = gtk.Image()
             image.set_from_pixbuf(icon_pixbuf)
             logo_button.set_image(image)
             hbox.pack_start(logo_button, expand=False, fill=False)
 
+        label = gtk.Label("Xpra Bug Report Tool")
+        label.modify_font(pango.FontDescription("sans 14"))
+        hbox.pack_start(label, expand=True, fill=True)
+        vbox.pack_start(hbox)
+
         #the box containing all the input:
-        ibox = Gtk.VBox(homogeneous=False, spacing=0)
+        ibox = gtk.VBox(False, 0)
         ibox.set_spacing(3)
         vbox.pack_start(ibox)
 
         # Description
-        al = Gtk.Alignment(xalign=0, yalign=0.5, xscale=0.0, yscale=0)
-        al.add(Gtk.Label(label="Please describe the problem:"))
+        al = gtk.Alignment(xalign=0, yalign=0.5, xscale=0.0, yscale=0)
+        al.add(gtk.Label("Please describe the problem:"))
         ibox.pack_start(al)
-        #self.description = Gtk.Entry(max=128)
+        #self.description = gtk.Entry(max=128)
         #self.description.set_width_chars(40)
-        self.description = Gtk.TextView()
+        self.description = gtk.TextView()
         self.description.set_accepts_tab(True)
-        self.description.set_justification(Gtk.Justification.LEFT)
+        self.description.set_justification(JUSTIFY_LEFT)
         self.description.set_border_width(2)
         self.description.set_size_request(300, 80)
-        #self.description.modify_bg(Gtk.StateType.NORMAL, Gdk.Color(red=32768, green=32768, blue=32768))
+        #self.description.modify_bg(STATE_NORMAL, gdk.Color(red=32768, green=32768, blue=32768))
         ibox.pack_start(self.description, expand=False, fill=False)
 
         # Toggles:
-        al = Gtk.Alignment(xalign=0, yalign=0.5, xscale=0.0, yscale=0)
-        al.add(Gtk.Label(label="Include:"))
+        al = gtk.Alignment(xalign=0, yalign=0.5, xscale=0.0, yscale=0)
+        al.add(gtk.Label("Include:"))
         ibox.pack_start(al)
         #generic toggles:
         from xpra.gtk_common.keymap import get_gtk_keymap
-        from xpra.codecs.loader import codec_versions, load_codecs, show_codecs
+        from xpra.codecs.loader import codec_versions, load_codecs
         load_codecs()
-        show_codecs()
         try:
             from xpra.sound.wrapper import query_sound
             def get_sound_info():
@@ -105,6 +110,11 @@ class BugReport:
         def get_gl_info():
             if self.opengl_info:
                 return self.opengl_info
+            try:
+                from xpra.client.gl.gtk_base.gtkgl_check import check_support
+                return check_support(force_enable=True)
+            except Exception as e:
+                return {"error" : str(e)}
         from xpra.net.net_util import get_info as get_net_info
         from xpra.platform.paths import get_info as get_path_info
         from xpra.platform.gui import get_info as get_gui_info
@@ -119,7 +129,7 @@ class BugReport:
                     "executable"    : sys.executable,
                     "version"       : get_version_info(),
                     "platform"      : get_platform_info(),
-                    "host"          : get_host_info(FULL_INFO),
+                    "host"          : get_host_info(),
                     "paths"         : get_path_info(),
                     "gtk"           : get_gtk_version_info(),
                     "gui"           : get_gui_info(),
@@ -164,51 +174,47 @@ class BugReport:
                 #take_screenshot() returns: w, h, "png", rowstride, data
                 return take_screenshot_fn()[4]
             get_screenshot = _get_screenshot
-        def get_server_log():
-            return self.server_log
         self.toggles = (
-            ("system",       "txt",  "System",           get_sys_info,   True,
-             "Xpra version, platform and host information - including hostname and account information"),
-            ("server-log",   "txt",  "Server Log",       get_server_log, bool(self.server_log),
-             "Xpra version, platform and host information - including hostname and account information"),
-            ("network",      "txt",  "Network",          get_net_info,   True,
-             "Compression, packet encoding and encryption"),
-            ("encoding",     "txt",  "Encodings",        codec_versions, bool(codec_versions),
-             "Picture encodings supported"),
-            ("opengl",       "txt",  "OpenGL",           get_gl_info,    bool(self.opengl_info),
-             "OpenGL driver and features"),
-            ("sound",        "txt",  "Sound",            get_sound_info, bool(get_sound_info),
-             "Sound codecs and GStreamer version information"),
-            ("keyboard",     "txt",  "Keyboard Mapping", get_gtk_keymap, True,
-             "Keyboard layout and key mapping"),
-            ("xpra-info",    "txt",  "Server Info",      self.get_server_info,   bool(self.get_server_info),
-             "Full server information from 'xpra info'"),
-            ("screenshot",   "png",  "Screenshot",       get_screenshot, bool(get_screenshot),
-             ""),
-            )
-        self.checkboxes = {}
-        for name, _, title, value_cb, sensitive, tooltip in self.toggles:
-            cb = Gtk.CheckButton(title+[" (not available)", ""][bool(value_cb)])
+                   ("system",       "txt",  "System",           get_sys_info,
+                    "Xpra version, platform and host information"),
+                   ("network",      "txt",  "Network",          get_net_info,
+                    "Compression, packet encoding and encryption"),
+                   ("encoding",     "txt",  "Encodings",        codec_versions,
+                    "Picture encodings supported"),
+                   ("opengl",       "txt",  "OpenGL",           get_gl_info,
+                    "OpenGL driver and features"),
+                   ("sound",        "txt",  "Sound",            get_sound_info,
+                    "Sound codecs and GStreamer version information"),
+                   ("keyboard",     "txt",  "Keyboard Mapping", get_gtk_keymap,
+                    "Keyboard layout and key mapping"),
+                   ("xpra-info",    "txt",  "Server Info",      self.get_server_info,
+                    "Full server information from 'xpra info'"),
+                   ("screenshot",   "png",  "Screenshot",       get_screenshot,
+                    ""),
+                   )
+        for name, _, title, value_cb, tooltip in self.toggles:
+            cb = gtk.CheckButton(title+[" (not available)", ""][bool(value_cb)])
             cb.set_active(self.includes.get(name, True))
-            cb.set_sensitive(sensitive)
+            cb.set_sensitive(bool(value_cb))
             cb.set_tooltip_text(tooltip)
             ibox.pack_start(cb)
-            self.checkboxes[name] = cb
+            setattr(self, name, cb)
 
         # Buttons:
-        hbox = Gtk.HBox(homogeneous=False, spacing=20)
+        hbox = gtk.HBox(False, 20)
         vbox.pack_start(hbox)
         def btn(label, tooltip, callback, icon_name=None):
-            btn = Gtk.Button(label)
+            btn = gtk.Button(label)
             btn.set_tooltip_text(tooltip)
             btn.connect("clicked", callback)
             if icon_name:
-                icon = get_icon_pixbuf(icon_name)
+                icon = self.get_icon(icon_name)
                 if icon:
                     btn.set_image(scaled_image(icon, 24))
             hbox.pack_start(btn)
             return btn
 
+        force_focus()
         btn("Copy to clipboard", "Copy all data to clipboard", self.copy_clicked, "clipboard.png")
         btn("Save", "Save Bug Report", self.save_clicked, "download.png")
         btn("Cancel", "", self.close, "quit.png")
@@ -219,14 +225,6 @@ class BugReport:
         vbox.show_all()
         self.window.vbox = vbox
         self.window.add(vbox)
-
-
-    def set_server_log_data(self, filedata):
-        self.server_log = filedata
-        cb = self.checkboxes.get("server-log")
-        log("set_server_log_data(%i bytes) cb=%s", len(filedata or b""), cb)
-        if cb:
-            cb.set_sensitive(bool(filedata))
 
 
     def show(self):
@@ -258,13 +256,21 @@ class BugReport:
 
     def run(self):
         log("run()")
-        Gtk.main()
-        log("run() Gtk.main done")
+        gtk_main()
+        log("run() gtk_main done")
 
     def quit(self, *args):
         log("quit%s", args)
         self.destroy()
-        Gtk.main_quit()
+        gtk.main_quit()
+
+
+    def get_icon(self, icon_name):
+        from xpra.platform.paths import get_icon_dir
+        icon_filename = os.path.join(get_icon_dir(), icon_name)
+        if os.path.exists(icon_filename):
+            return pixbuf_new_from_file(icon_filename)
+        return None
 
 
     def get_data(self):
@@ -274,10 +280,10 @@ class BugReport:
         buf = tb.get_text(*tb.get_bounds(), include_hidden_chars=False)
         if buf:
             data.append(("Description", "", "txt", buf))
-        for name, dtype, title, value_cb, _, tooltip in self.toggles:
+        for name, dtype, title, value_cb, tooltip in self.toggles:
             if not bool(value_cb):
                 continue
-            cb = self.checkboxes.get(name)
+            cb = getattr(self, name)
             assert cb is not None
             if not cb.get_active():
                 continue
@@ -316,15 +322,15 @@ class BugReport:
             return str(v)
         text = os.linesep.join("%s: %s%s%s%s" % (title, tooltip, os.linesep, cdata(v), os.linesep)
                                for (title,tooltip,dtype,v) in data if dtype=="txt")
-        clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
-        clipboard.set_text(text, len(text))
+        clipboard = gtk.clipboard_get(gdk.SELECTION_CLIPBOARD)
+        clipboard.set_text(text)
         log.info("%s characters copied to clipboard", len(text))
 
     def save_clicked(self, *_args):
-        file_filter = Gtk.FileFilter()
+        file_filter = gtk.FileFilter()
         file_filter.set_name("ZIP")
         file_filter.add_pattern("*.zip")
-        choose_file(self.window, "Save Bug Report Data",  Gtk.FileChooserAction.SAVE, Gtk.STOCK_SAVE, self.do_save)
+        choose_file(self.window, "Save Bug Report Data", FILE_CHOOSER_ACTION_SAVE, gtk.STOCK_SAVE, self.do_save)
 
     def do_save(self, filename):
         log("do_save(%s)", filename)
@@ -333,43 +339,32 @@ class BugReport:
         basenoext = os.path.splitext(os.path.basename(filename))[0]
         data = self.get_data()
         import zipfile
-        zf = None
+        zf = zipfile.ZipFile(filename, mode='w', compression=zipfile.ZIP_DEFLATED)
         try:
-            zf = zipfile.ZipFile(filename, mode='w', compression=zipfile.ZIP_DEFLATED)
             for title, tooltip, dtype, s in data:
                 cfile = os.path.join(basenoext, title.replace(" ", "_")+"."+dtype)
                 info = zipfile.ZipInfo(cfile, date_time=time.localtime(time.time()))
                 info.compress_type = zipfile.ZIP_DEFLATED
                 #very poorly documented:
                 info.external_attr = 0o644 << 16
-                info.comment = str(tooltip).encode("utf8")
-                if isinstance(s, bytes):
+                info.comment = strtobytes(tooltip)
+                if PYTHON3 and isinstance(s, bytes):
                     try:
                         try:
                             import tempfile
-                            temp = tempfile.NamedTemporaryFile(prefix="xpra.", suffix=".%s" % dtype, delete=False)
+                            temp = tempfile.NamedTemporaryFile(prefix="xpra.", suffix=".screenshot", delete=False)
                             with temp:
                                 temp.write(s)
                                 temp.flush()
                         except OSError as e:
                             log.error("Error: cannot create mmap file:")
-                            log.estr(e)
+                            log.error(" %s", e)
                         else:
-                            zf.write(temp.name, cfile, zipfile.ZIP_STORED if dtype=="png" else zipfile.ZIP_DEFLATED)
+                            zf.write(temp.name, cfile, zipfile.ZIP_STORED)
                     finally:
                         if temp:
                             os.unlink(temp.name)
                 else:
                     zf.writestr(info, str(s))
-        except OSError as e:
-            log("do_save(%s) failed to save zip file", filename, exc_info=True)
-            dialog = Gtk.MessageDialog(self.window, 0, Gtk.MessageType.WARNING,
-                                       Gtk.ButtonsType.CLOSE, "Failed to save ZIP file")
-            dialog.format_secondary_text("%s" % e)
-            def close(*_args):
-                dialog.destroy()
-            dialog.connect("response", close)
-            dialog.show_all()
         finally:
-            if zf:
-                zf.close()
+            zf.close()

@@ -1,17 +1,14 @@
 # This file is part of Xpra.
-# Copyright (C) 2019-2022 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2019 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
 import os
 
 from xpra.os_util import load_binary_file
-from xpra.log import Logger
-
-log = Logger("auth")
 
 
-class Handler:
+class Handler(object):
 
     def __init__(self, client, **kwargs):
         self.client = client
@@ -24,14 +21,15 @@ class Handler:
     def __repr__(self):
         return "file"
 
-    def get_digest(self) -> str:
+    def get_digest(self):
         return None
 
-    def handle(self, challenge, digest, prompt) -> bool:  # pylint: disable=unused-argument
-        log("handle(..) password_file=%s", self.password_file)
+    def handle(self, packet):
         if not self.password_file:
-            return None
+            return False
         filename = os.path.expanduser(self.password_file)
         data = load_binary_file(filename)
-        log("loaded password data from %s: %s", filename, bool(data))
-        return data
+        if not data:
+            return False
+        self.client.send_challenge_reply(packet, data)
+        return True

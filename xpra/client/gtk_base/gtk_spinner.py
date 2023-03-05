@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 # This file is part of Xpra.
 # The code was taken from here:
@@ -8,30 +8,33 @@
 # later version. See the file COPYING for details.
 
 import math
-import cairo
-from gi.repository import GLib, Gtk  # @UnresolvedImport
 
 from xpra.client.spinner import cv
+from xpra.gtk_common.gobject_compat import import_gtk, import_glib, import_cairo
+
+gtk     = import_gtk()
+glib    = import_glib()
+cairo   = import_cairo()
 
 
-class Example(Gtk.Window):
+class Example(gtk.Window):
 
     def __init__(self):
-        super().__init__()
+        super(Example, self).__init__()
         self.init_ui()
 
     def init_ui(self):
-        self.darea = Gtk.DrawingArea()
+        self.darea = gtk.DrawingArea()
         self.darea.connect("expose-event", self.expose)
         self.add(self.darea)
 
         self.count = 0
-        GLib.timeout_add(cv.SPEED, self.on_timer)
+        glib.timeout_add(cv.SPEED, self.on_timer)
 
         self.set_title("Waiting")
         self.resize(250, 150)
-        self.set_position(Gtk.WindowPosition.CENTER)
-        self.connect("delete-event", Gtk.main_quit)
+        self.set_position(gtk.WIN_POS_CENTER)
+        self.connect("delete-event", gtk.main_quit)
         self.show_all()
 
 
@@ -45,7 +48,7 @@ class Example(Gtk.Window):
     def expose(self, widget, _cr):
         cr = widget.window.cairo_create()
         cr.set_line_width(3)
-        cr.set_line_cap(cairo.LINE_CAP_ROUND)  # @UndefinedVariable
+        cr.set_line_cap(cairo.LINE_CAP_ROUND)
         w, h = self.get_size()
         cr.translate(w/2, h/2)
         for i in range(cv.NLINES):
@@ -58,7 +61,7 @@ class Example(Gtk.Window):
 
 def main():
     Example()
-    Gtk.main()
+    gtk.main()
 
 
 if __name__ == "__main__":

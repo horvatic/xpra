@@ -1,12 +1,12 @@
 # This file is part of Xpra.
-# Copyright (C) 2019-2022 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2019 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
 import os
 
 from xpra.util import csv
-from xpra.os_util import WIN32
+from xpra.os_util import bytestostr, WIN32
 from xpra.log import Logger
 
 log = Logger("auth")
@@ -23,9 +23,9 @@ def log_kerberos_exception(e):
                     pass
             log.error(" %s", x)
     except Exception:
-        log.estr(e)
+        log.error(" %s", e)
 
-class Handler:
+class Handler(object):
 
     def __init__(self, client, **_kwargs):
         self.client = client
@@ -34,16 +34,16 @@ class Handler:
     def __repr__(self):
         return "kerberos"
 
-    def get_digest(self) -> str:
+    def get_digest(self):
         return "kerberos"
 
-    def handle(self, challenge, digest, prompt) -> bool:  # pylint: disable=unused-argument
+    def handle(self, packet):
+        digest = bytestostr(packet[3])
         if not digest.startswith("kerberos:"):
             log("%s is not a kerberos challenge", digest)
             #not a kerberos challenge
-            return None
+            return False
         try:
-            # pylint: disable=import-outside-toplevel
             if WIN32:
                 import winkerberos as kerberos
             else:
@@ -56,25 +56,24 @@ class Handler:
         if service not in self.services and "*" not in self.services:
             log.warn("Warning: invalid kerberos request for service '%s'", service)
             log.warn(" services supported: %s", csv(self.services))
-            return None
+            return False
         log("kerberos service=%s", service)
         try:
             r, ctx = kerberos.authGSSClientInit(service)
-            if r!=1:
-                log("kerberos.authGSSClientInit failed and returned %s", r)
-                return None
+            assert r==1, "return code %s" % r
         except Exception as e:
             log("kerberos.authGSSClientInit(%s)", service, exc_info=True)
             log.error("Error: cannot initialize kerberos client:")
             log_kerberos_exception(e)
-            return None
+            return False
         try:
             kerberos.authGSSClientStep(ctx, "")
         except Exception as e:
             log("kerberos.authGSSClientStep", exc_info=True)
             log.error("Error: kerberos client authentication failure:")
             log_kerberos_exception(e)
-            return None
+            return False
         token = kerberos.authGSSClientResponse(ctx)
         log("kerberos token=%s", token)
-        return token
+        self.client.send_challenge_reply(packet, token)
+        return True

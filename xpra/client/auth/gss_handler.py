@@ -1,5 +1,5 @@
 # This file is part of Xpra.
-# Copyright (C) 2019-2022 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2019 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
@@ -12,7 +12,7 @@ from xpra.log import Logger
 log = Logger("auth")
 
 
-class Handler:
+class Handler(object):
 
     def __init__(self, client, **_kwargs):
         self.client = client
@@ -21,32 +21,30 @@ class Handler:
     def __repr__(self):
         return "gss"
 
-    def get_digest(self) -> str:
+    def get_digest(self):
         return "gss"
 
-    def handle(self, challenge, digest, prompt) -> bool:  # pylint: disable=unused-argument
+    def handle(self, packet):
+        digest = bytestostr(packet[3])
         if not digest.startswith("gss:"):
             #not a gss challenge
             log("%s is not a gss challenge", digest)
-            return None
+            return False
         try:
-            #pylint: disable=import-outside-toplevel
             import gssapi       #@UnresolvedImport
             self.gssapi = gssapi
-            if OSX:
-                #this is a workaround for py2app,
-                #to ensure it includes all the modules we need:
-                from gssapi.raw import cython_converters, cython_types, oids    # @UnresolvedImport
+            if OSX and False:
+                from gssapi.raw import (cython_converters, cython_types, oids)  # @UnresolvedImport
                 assert cython_converters and cython_types and oids
         except ImportError as e:
             log.warn("Warning: cannot use gss authentication handler")
             log.warn(" %s", e)
-            return None
+            return False
         service = bytestostr(digest.split(b":", 1)[1])
         if service not in self.services and "*" not in self.services:
             log.warn("Warning: invalid GSS request for service '%s'", service)
             log.warn(" services supported: %s", csv(self.services))
-            return None
+            return False
         log("gss service=%s", service)
         service_name = self.gssapi.Name(service)
         try:
@@ -59,7 +57,8 @@ class Handler:
                 for x in str(e).split(":", 2):
                     log.error(" %s", x.lstrip(" "))
             except Exception:
-                log.estr(e)
-            return None
+                log.error(" %s", e)
+            return False
         log("gss token=%s", repr(token))
-        return token
+        self.client.send_challenge_reply(packet, token)
+        return True

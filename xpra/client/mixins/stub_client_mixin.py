@@ -9,107 +9,106 @@ import time
 from xpra.util import typedict
 
 
-class StubClientMixin:
+class StubClientMixin(object):
 
     __signals__ = {}
     def __init__(self):
         self.exit_code = None
         self.start_time = int(time.time())
+        self.server_capabilities = typedict()
 
-    def init(self, opts):
-        """
-        Initialize this instance with the options given.
-        Options are usually obtained by parsing the command line,
-        or using a default configuration object.
-        """
+    """
+    Initialize this instance with the options given.
+    Options are usually obtained by parsing the command line,
+    or using a default configuration object.
+    """
+    def init(self, _opts, _extra_args=()):
+        pass
 
+    """
+    Dummy method, actual client implementations will run the main loop.
+    """
     def run(self):
-        """
-        run the main loop.
-        """
+        pass
 
-    def quit(self, exit_code):  # pragma: no cover
-        """
-        Terminate the client with the given exit code.
-        (the exit code is ignored if we already have one)
-        """
+    """
+    Terminate the client with the given exit code.
+    (the exit code is ignored if we already have one)
+    """
+    def quit(self, exit_code):
         self.exit_code = exit_code
         sys.exit(exit_code)
 
+    """
+    Free up any resources.
+    """
     def cleanup(self):
-        """
-        Free up any resources.
-        """
+        pass
 
-    def send(self, *_args):
-        """
-        Send a packet to the server, dummy implementation.
-        """
+    """
+    Send a packet to the server, dummy implementation.
+    """
+    def send(self, *_args, **_kwargs):
+        pass
 
+    """
+    Send a packet to the server,
+    this takes precedence over packets sent via send().
+    """
     def send_now(self, *parts):
-        """
-        Send a packet to the server,
-        this takes precedence over packets sent via send().
-        """
+        pass
 
+    """
+    Emit a signal, dummy implementation overriden by gobject.
+    """
     def emit(self, *_args, **_kwargs):
-        """
-        Emit a signal, dummy implementation overriden by gobject.
-        """
+        pass
 
+    """
+    Prepare to run using this connection to the server.
+    """
     def setup_connection(self, _conn):
-        """
-        Prepare to run using this connection to the server.
-        """
+        pass
 
-    def get_caps(self) -> dict:
-        """
-        Return the capabilities provided by this mixin.
-        """
+    """
+    Return the capabilities provided by this mixin.
+    """
+    def get_caps(self):
         return {}
 
-    def get_info(self) -> dict:
-        """
-        Information contained in this mixin
-        """
-        return {}
-
-    def parse_server_capabilities(self, c : typedict) -> bool:  #pylint: disable=unused-argument
-        """
-        Parse server attributes specified in the hello capabilities.
-        This runs in a non-UI thread.
-        """
+    """
+    Parse server attributes specified in the hello capabilities.
+    This runs in a non-UI thread.
+    """
+    def parse_server_capabilities(self):
         return True
 
-    def process_ui_capabilities(self, caps : typedict):
-        """
-        Parse server attributes specified in the hello capabilities.
-        This runs in the UI thread.
-        """
+    """
+    Parse server attributes specified in the hello capabilities.
+    This runs in the UI thread.
+    """
+    def process_ui_capabilities(self):
+        pass
 
-    def compressed_wrapper(self, datatype, data, level=5, **kwargs):
-        """
-        Dummy utility method for compressing data.
-        Actual client implementations will provide compression
-        based on the client and server capabilities (lz4, zlib).
-        """
+    """
+    Dummy utility method for compressing data.
+    Actual client implementations will provide compression
+    based on the client and server capabilities (lz4, lzo, zlib).
+    """
+    def compressed_wrapper(self, datatype, data, level=5):
         #sub-classes should override this
         assert level>=0
         from xpra.net.compression import Compressed
         return Compressed("raw %s" % datatype, data, can_inline=True)
 
+    """
+    Register the packet types that this mixin can handle.
+    """
     def init_authenticated_packet_handlers(self):
-        """
-        Register the packet types that this mixin can handle.
-        """
+        pass
 
-    def add_packet_handler(self, packet_type : str, handler : callable, main_thread=True):  # pragma: no cover
+    def add_packet_handler(self, packet_type, handler, main_thread=True):
         raise NotImplementedError()
 
-    def add_packet_handlers(self, defs, main_thread=True):  # pragma: no cover
+    def add_packet_handlers(self, defs, main_thread=True):
         raise NotImplementedError()
-
-    def show_progress(self, pct, text=""):
-        """
-        The GTK client may use the splash screen here
-        """

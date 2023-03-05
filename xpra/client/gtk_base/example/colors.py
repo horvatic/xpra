@@ -1,55 +1,41 @@
-#!/usr/bin/env python3
-# Copyright (C) 2017-2020 Antoine Martin <antoine@xpra.org>
+#!/usr/bin/env python
+# Copyright (C) 2017 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
-from xpra.platform import program_context
-from xpra.platform.gui import force_focus
-from xpra.gtk_common.gtk_util import add_close_accel, get_icon_pixbuf
+import cairo
 
-from cairo import OPERATOR_CLEAR, OPERATOR_SOURCE  #pylint: disable=no-name-in-module
-import gi
-gi.require_version("Gtk", "3.0")  # @UndefinedVariable
-gi.require_version("Gdk", "3.0")  # @UndefinedVariable
-from gi.repository import GLib, Gtk, Gdk  # @UnresolvedImport
+from xpra.gtk_common.gobject_compat import import_gtk, import_glib, is_gtk3
+from xpra.gtk_common.gtk_util import WIN_POS_CENTER, KEY_PRESS_MASK, add_close_accel
+
+gtk = import_gtk()
+gLib = import_glib()
 
 
-class AnimatedColorWindow(Gtk.Window):
+class AnimatedColorWindow(gtk.Window):
 
     def __init__(self):
-        super().__init__()
-        self.set_position(Gtk.WindowPosition.CENTER)
+        super(AnimatedColorWindow, self).__init__()
+        self.set_position(WIN_POS_CENTER)
         self.set_default_size(320, 320)
         self.set_app_paintable(True)
-        self.set_events(Gdk.EventMask.KEY_PRESS_MASK | Gdk.EventMask.BUTTON_PRESS_MASK)
-        icon = get_icon_pixbuf("encoding.png")
-        if icon:
-            self.set_icon(icon)
+        self.set_events(KEY_PRESS_MASK)
         self.counter = 0
-        self.increase = True
-        self.last_event = None
-        self.set_title("Animated Colors")
-        drawing_area = Gtk.DrawingArea()
-        drawing_area.connect("draw", self.area_draw)
-        self.add(drawing_area)
-        self.connect("destroy", Gtk.main_quit)
-        self.connect("key_press_event", self.on_press)
-        self.connect("button_press_event", self.on_press)
-        GLib.timeout_add(50, self.repaint)
-
-    def show_with_focus(self):
-        force_focus()
+        self.increase = False
+        if is_gtk3():
+            self.connect("draw", self.area_draw)
+        else:
+            self.connect("expose-event", self.do_expose_event)
+        self.connect("destroy", gtk.main_quit)
+        self.connect("key_press_event", self.on_key_press)
         self.show_all()
-        super().present()
+        gLib.timeout_add(50, self.repaint)
 
     def do_expose_event(self, *_args):
         cr = self.get_window().cairo_create()
         self.area_draw(self, cr)
 
-    def on_press(self, _window, event):
-        if event==self.last_event:
-            return
-        self.last_event = event
+    def on_key_press(self, *_args):
         self.increase = not self.increase
 
     def repaint(self):
@@ -61,16 +47,15 @@ class AnimatedColorWindow(Gtk.Window):
     def area_draw(self, widget, cr):
         cr.set_font_size(32)
         #Clear everything:
-        cr.set_operator(OPERATOR_CLEAR)
-        alloc = widget.get_allocated_size()[0]
-        w, h = alloc.width, alloc.height
+        cr.set_operator(cairo.OPERATOR_CLEAR)
+        w, h = widget.get_size()
         cr.rectangle(0, 0, w, h)
         cr.fill()
 
         def paint_block(x, y, w, h, Rm=1.0, Gm=1.0, Bm=1.0, label=""):
-            bw = w/16
-            bh = h/16
-            cr.set_operator(OPERATOR_SOURCE)
+            bw = float(w)/16
+            bh = float(h)/16
+            cr.set_operator(cairo.OPERATOR_SOURCE)
             for i in range(256):
                 v = ((self.counter+i) % 256) / 256.0
                 R = Rm * v
@@ -98,19 +83,16 @@ class AnimatedColorWindow(Gtk.Window):
 
 def main():
     from xpra.platform.gui import init, set_default_icon
-    with program_context("colors", "Colors"):
-        set_default_icon("encoding.png")
-        init()
-
-        from xpra.gtk_common.gobject_compat import register_os_signals
-        def signal_handler(*_args):
-            Gtk.main_quit()
-        register_os_signals(signal_handler, "test window")
-        w = AnimatedColorWindow()
-        add_close_accel(w, Gtk.main_quit)
-        GLib.idle_add(w.show_with_focus)
-        Gtk.main()
-        return 0
+    set_default_icon("encoding.png")
+    init()
+    import signal
+    def signal_handler(*_args):
+        gtk.main_quit()
+    signal.signal(signal.SIGINT, signal_handler)
+    w = AnimatedColorWindow()
+    add_close_accel(w, gtk.main_quit)
+    gtk.main()
+    return 0
 
 
 if __name__ == "__main__":

@@ -17,6 +17,7 @@ import binascii
 import threading
 from time import monotonic, sleep
 from subprocess import PIPE, Popen
+monotonic_time = monotonic
 
 # only mininal imports go at the top
 # so that this file can be included everywhere
@@ -28,6 +29,8 @@ for signame in (sig for sig in dir(signal) if sig.startswith("SIG") and not sig.
     SIGNAMES[getattr(signal, signame)] = signame
 
 
+PYTHON3 = True
+PYTHON2 = False
 WIN32 = sys.platform.startswith("win")
 OSX = sys.platform.startswith("darwin")
 LINUX = sys.platform.startswith("linux")
@@ -966,3 +969,5 @@ def is_socket(sockpath, check_uid=None):
             get_util_logger().debug(f"is_socket({sockpath}) uid {s.st_uid} does not match {check_uid}")
             return False
     return True
+
+from queue import Queue             #@UnresolvedImport @UnusedImport (python3)

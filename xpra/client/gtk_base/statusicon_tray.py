@@ -4,22 +4,26 @@
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
-# A tray implemented using Gtk.StatusIcon
+# A tray implemented using gtk.StatusIcon
 
 import os
-from time import time, monotonic
-from gi.repository import Gtk, Gdk, GdkPixbuf
+from time import time
 
-from xpra.os_util import WIN32, OSX, POSIX
+from xpra.os_util import WIN32, OSX, POSIX, PYTHON3, monotonic_time
 from xpra.util import envbool
+from xpra.gtk_common.gobject_compat import import_gtk, import_gdk
 from xpra.client.tray_base import TrayBase, log
 from xpra.gtk_common.gtk_util import (
     get_icon_from_file, get_pixbuf_from_data, get_default_root_window,
+    INTERP_HYPER, SHIFT_MASK, ORIENTATION_VERTICAL, ORIENTATION_HORIZONTAL,
     )
 
+gtk = import_gtk()
+gdk = import_gdk()
+
 ORIENTATION = {
-    Gtk.Orientation.HORIZONTAL  : "HORIZONTAL",
-    Gtk.Orientation.VERTICAL    : "VERTICAL",
+    ORIENTATION_HORIZONTAL  : "HORIZONTAL",
+    ORIENTATION_VERTICAL    : "VERTICAL",
     }
 
 GUESS_GEOMETRY = WIN32 or OSX
@@ -31,8 +35,8 @@ SAVE = envbool("XPRA_SAVE_SYSTRAY", False)
 class GTKStatusIconTray(TrayBase):
 
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.tray_widget = Gtk.StatusIcon()
+        TrayBase.__init__(self, *args, **kwargs)
+        self.tray_widget = gtk.StatusIcon()
         self.tray_widget.set_tooltip_text(self.tooltip or "Xpra")
         self.tray_widget.connect('activate', self.activate_menu)
         self.tray_widget.connect('popup-menu', self.popup_menu)
@@ -52,7 +56,7 @@ class GTKStatusIconTray(TrayBase):
     def activate_menu(self, widget):
         modifiers_mask = get_default_root_window().get_pointer()[-1]
         log("activate_menu(%s) modifiers_mask=%s", widget, modifiers_mask)
-        if (modifiers_mask & Gdk.ModifierType.SHIFT_MASK) ^ OSX:
+        if (modifiers_mask & SHIFT_MASK) ^ OSX:
             self.handle_click(3)
         else:
             self.handle_click(1)
@@ -60,7 +64,7 @@ class GTKStatusIconTray(TrayBase):
     def popup_menu(self, widget, button, event_time, *args):
         modifiers_mask = get_default_root_window().get_pointer()[-1]
         log("popup_menu(%s, %s, %s, %s) modifiers_mask=%s", widget, button, event_time, args, modifiers_mask)
-        if (modifiers_mask & Gdk.ModifierType.SHIFT_MASK) ^ OSX:
+        if (modifiers_mask & SHIFT_MASK) ^ OSX:
             self.handle_click(1)
         else:
             self.handle_click(3)
@@ -143,8 +147,8 @@ class GTKStatusIconTray(TrayBase):
             self.tray_widget.set_tooltip_text(tooltip or "Xpra")
 
     def set_blinking(self, on):
-        #no longer supported with GTK3
-        pass
+        if self.tray_widget and hasattr(self.tray_widget, "set_blinking"):
+            self.tray_widget.set_blinking(on)
 
 
     def set_icon_from_data(self, pixels, has_alpha, w, h, rowstride, _options=None):
@@ -166,25 +170,40 @@ class GTKStatusIconTray(TrayBase):
         h = tray_icon.get_height()
         log("set_icon_from_pixbuf(%s) geometry=%s, icon size=%s", tray_icon, self.get_geometry(), (w, h))
         if tw!=w or th!=h:
-            tray_icon = tray_icon.scale_simple(tw, th, GdkPixbuf.InterpType.HYPER)
-            log("tray icon scaled to %ix%i", tw, th)
+            if tw!=th and not PYTHON3:
+                #paste the scaled icon in the middle of the rectangle:
+                minsize = min(tw, th)
+                new_icon = get_pixbuf_from_data(b"\0"*tw*th*4, True, tw, th, tw*4)
+                scaled_w, scaled_h = minsize, minsize
+                if tw==24 and th==64:
+                    #special case for the gnome-shell dimensions - stretch height..
+                    scaled_w, scaled_h = 24, 48
+                tray_icon = tray_icon.scale_simple(scaled_w, scaled_h, INTERP_HYPER)
+                tray_icon.copy_area(0, 0, scaled_w, scaled_h, new_icon, (tw-scaled_w)//2, (th-scaled_h)//2)
+                log("tray icon scaled to %ix%i and pasted into the middle of %ix%i blank icon",
+                    scaled_w, scaled_h, tw, th)
+                tray_icon = new_icon
+            else:
+                tray_icon = tray_icon.scale_simple(tw, th, INTERP_HYPER)
+                log("tray icon scaled to %ix%i", tw, th)
         if SAVE:
             filename = "./statusicon-%s.png" % time()
             tray_icon.savev(filename, "png")
             log.info("statusicon tray saved to %s", filename)
         self.tray_widget.set_from_pixbuf(tray_icon)
-        self.icon_timestamp = monotonic()
+        self.icon_timestamp = monotonic_time()
 
 
 def main():
     log.enable_debug()
-    from gi.repository import GLib
+    from xpra.gtk_common.gobject_compat import import_glib
+    glib = import_glib()
     log.enable_debug()
-    s = GTKStatusIconTray(None, None, None, "test", "xpra.png", None, None, None, Gtk.main_quit)
-    GLib.timeout_add(1000*2, s.set_blinking, True)
-    GLib.timeout_add(1000*5, s.set_blinking, False)
-    GLib.timeout_add(1000*30, Gtk.main_quit)
-    Gtk.main()
+    s = GTKStatusIconTray(None, None, None, "test", "xpra.png", None, None, None, gtk.main_quit)
+    glib.timeout_add(1000*2, s.set_blinking, True)
+    glib.timeout_add(1000*5, s.set_blinking, False)
+    glib.timeout_add(1000*30, gtk.main_quit)
+    gtk.main()
 
 
 if __name__ == "__main__":

@@ -393,6 +393,14 @@ class typedict(dict):
     def _warn(self, msg, *args):
         get_util_logger().warn(msg, *args)
 
+    def rawget(self, key, default=None):
+        v = self.get(key)
+        #py3k and bytes as keys...
+        if v is None and isinstance(key, str):
+            from xpra.os_util import strtobytes
+            v = self.get(strtobytes(key), default)
+        return v
+
     def conv_get(self, k, default=None, conv=None):
         if not super().__contains__(bytestostr(k)):
             return default
@@ -437,11 +445,20 @@ class typedict(dict):
         except ValueError:
             return default_value
 
+    def strlistget(self, *args):
+        return list(self.strtupleget(*args) or [])
+
     def strtupleget(self, k : str, default_value=(), min_items=None, max_items=None):
         return self.tupleget(k, default_value, str, min_items, max_items)
 
+    def intlistget(self, *args):
+        return list(self.inttupleget(*args) or [])
+
     def inttupleget(self, k : str, default_value=(), min_items=None, max_items=None):
         return self.tupleget(k, default_value, int, min_items, max_items)
+
+    def listget(self, *args):
+        return list(self.tupleget(*args))
 
     def tupleget(self, k : str, default_value=(), item_type=None, min_items=None, max_items=None):
         v = self._listget(k, default_value, item_type, min_items, max_items)
@@ -998,3 +1015,8 @@ def first_time(key):
         _once_only.add(key)
         return True
     return False
+
+
+def iround(v):
+    return int(v+0.5)
+

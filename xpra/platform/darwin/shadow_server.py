@@ -7,14 +7,13 @@
 import Quartz.CoreGraphics as CG    #@UnresolvedImport
 
 from xpra.util import envbool
-from xpra.os_util import memoryview_to_bytes
+from xpra.os_util import memoryview_to_bytes, _buffer
 from xpra.scripts.config import InitExit
 from xpra.scripts.main import check_display
-from xpra.exit_codes import ExitCode
 from xpra.server.gtk_server_base import GTKServerBase
 from xpra.server.shadow.gtk_shadow_server_base import GTKShadowServerBase
 from xpra.platform.darwin.keyboard_config import KeyboardConfig
-from xpra.platform.darwin.gui import get_CG_imagewrapper, take_screenshot
+from xpra.platform.darwin.gui import get_CG_imagewrapper, take_screenshot, can_access_display
 from xpra.log import Logger
 
 log = Logger("shadow", "osx")
@@ -32,21 +31,21 @@ ALPHA = {
          CG.kCGImageAlphaNoneSkipFirst         : "SkipFirst",
    }
 
-BTYPES = tuple((str, bytes, memoryview, bytearray))
+BTYPES = tuple(x for x in (str, bytes, memoryview, _buffer, bytearray) if x is not None)
 
 #ensure that picture_encode can deal with pixels as NSCFData:
-def patch_pixels_to_bytes():
+def patch_picture_encode():
     from CoreFoundation import CFDataGetBytes, CFDataGetLength  #@UnresolvedImport
     def pixels_to_bytes(v):
         if isinstance(v, BTYPES):
             return memoryview_to_bytes(v)
         l = CFDataGetLength(v)
         return CFDataGetBytes(v, (0, l), None)
-    from xpra.codecs import rgb_transform
-    rgb_transform.pixels_to_bytes = pixels_to_bytes
+    from xpra.server import picture_encode
+    picture_encode.pixels_to_bytes = pixels_to_bytes
 
 
-class OSXRootCapture:
+class OSXRootCapture(object):
 
     def __repr__(self):
         return "OSXRootCapture"
@@ -55,13 +54,13 @@ class OSXRootCapture:
         return True
 
     def clean(self):
-        """ nothing specific to do here on MacOS """
+        pass
 
     def get_image(self, x, y, width, height):
         rect = (x, y, width, height)
         return get_CG_imagewrapper(rect)
 
-    def get_info(self) -> dict:
+    def get_info(self):
         return {}
 
     def take_screenshot(self):
@@ -71,8 +70,7 @@ class OSXRootCapture:
 
 class ShadowServer(GTKShadowServerBase):
 
-    def __init__(self, multi_window=True):
-        super().__init__(multi_window)
+    def __init__(self):
         #sanity check:
         check_display()
         image = CG.CGWindowListCreateImage(CG.CGRectInfinite,
@@ -81,15 +79,15 @@ class ShadowServer(GTKShadowServerBase):
                     CG.kCGWindowImageDefault)
         if image is None:
             log("cannot grab test screenshot - maybe you need to run this command whilst logged in via the UI")
-            raise InitExit(ExitCode.FAILURE, "cannot grab pixels from the screen, make sure this command is launched from a GUI session")
-        patch_pixels_to_bytes()
+            raise InitExit(EXIT_FAILURE, "cannot grab pixels from the screen, make sure this command is launched from a GUI session")
+        patch_picture_encode()
         self.refresh_count = 0
         self.refresh_rectangle_count = 0
         self.refresh_registered = False
-        super().__init__()
+        GTKShadowServerBase.__init__(self)
 
     def init(self, opts):
-        super().init(opts)
+        GTKShadowServerBase.init(self, opts)
         self.keycodes = {}
         #printing fails silently on OSX
         self.printing = False
@@ -148,12 +146,12 @@ class ShadowServer(GTKShadowServerBase):
                 return
             log.warn("Warning: CGRegisterScreenRefreshCallback failed with error %i", err)
             log.warn(" using fallback timer method")
-        super().start_refresh(wid)
+        GTKShadowServerBase.start_refresh(self, wid)
 
     def stop_refresh(self, wid):
         log("stop_refresh(%i) mapped=%s, timer=%s", wid, self.mapped, self.refresh_timer)
         #may stop the timer fallback:
-        super().stop_refresh(wid)
+        GTKShadowServerBase.stop_refresh(self, wid)
         if self.refresh_registered and not self.mapped:
             try:
                 err = CG.CGUnregisterScreenRefreshCallback(self.screen_refresh_callback, None)
@@ -166,12 +164,11 @@ class ShadowServer(GTKShadowServerBase):
             self.refresh_registered = False
 
 
-    def do_process_mouse_common(self, proto, device_id, wid, pointer, props):
-        if proto not in self._server_sources:
-            return False
+    def do_process_mouse_common(self, proto, wid, pointer, *args):
+        assert proto in self._server_sources
         assert wid in self._id_to_window
         CG.CGWarpMouseCursorPosition(pointer[:2])
-        return True
+        return pointer
 
     def fake_key(self, keycode, press):
         e = CG.CGEventCreateKeyboardEvent(None, keycode, press)
@@ -182,37 +179,36 @@ class ShadowServer(GTKShadowServerBase):
         #this causes crashes, don't do it!
         #CG.CFRelease(e)
 
-    def do_process_button_action(self, proto, device_id, wid, button, pressed, pointer, props):
-        if "modifiers" in props:
-            self._update_modifiers(proto, wid, props.get("modifiers"))
-        pointer = self._process_mouse_common(proto, device_id, wid, pointer)
+    def do_process_button_action(self, proto, wid, button, pressed, pointer, modifiers, *args):
+        self._update_modifiers(proto, wid, modifiers)
+        pointer = self._process_mouse_common(proto, wid, pointer)
         if pointer:
-            self.button_action(device_id, wid, pointer, button, pressed, props)
+            self.button_action(pointer, button, pressed, -1, *args)
 
-    def button_action(self, device_id, wid, pointer, button, pressed, props):
+    def button_action(self, pointer, button, pressed, _deviceid=-1, *args):
         if button<=3:
             #we should be using CGEventCreateMouseEvent
             #instead we clear previous clicks when a "higher" button is pressed... oh well
-            event = [pointer[:2], 1, button]
+            args = []
             for i in range(button):
-                event.append(i==(button-1) and pressed)
-            r = CG.CGPostMouseEvent(*event)
-            log("CG.CGPostMouseEvent%s=%s", event, r)
-            return
-        if not pressed:
-            #we don't simulate press/unpress
-            #so just ignore unpressed events
-            return
-        wheel = (button-2)//2
-        direction = 1-(((button-2) % 2)*2)
-        event = [wheel]
-        for i in range(wheel):
-            if i!=(wheel-1):
-                event.append(0)
-            else:
-                event.append(direction)
-        r = CG.CGPostScrollWheelEvent(*event)
-        log("CG.CGPostScrollWheelEvent%s=%s", event, r)
+                args.append(i==(button-1) and pressed)
+            log("CG.CGPostMouseEvent(%s, %s, %s, %s)", pointer[:2], 1, button, args)
+            CG.CGPostMouseEvent(pointer[:2], 1, button, *args)
+        else:
+            if not pressed:
+                #we don't simulate press/unpress
+                #so just ignore unpressed events
+                return
+            wheel = (button-2)//2
+            direction = 1-(((button-2) % 2)*2)
+            args = []
+            for i in range(wheel):
+                if i!=(wheel-1):
+                    args.append(0)
+                else:
+                    args.append(direction)
+            log("CG.CGPostScrollWheelEvent(%s, %s)", wheel, args)
+            CG.CGPostScrollWheelEvent(wheel, *args)
 
     def make_hello(self, source):
         capabilities = GTKServerBase.make_hello(self, source)

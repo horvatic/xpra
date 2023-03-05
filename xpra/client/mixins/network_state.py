@@ -1,18 +1,15 @@
 # This file is part of Xpra.
-# Copyright (C) 2010-2022 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2010-2019 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 #pylint: disable-msg=E1101
 
 import os
 import re
-from time import monotonic
 from collections import deque
 
-from xpra.os_util import POSIX
-from xpra.util import envint, envbool, csv, typedict
-from xpra.exit_codes import ExitCode
-from xpra.net.packet_encoding import ALL_ENCODERS
+from xpra.os_util import monotonic_time, POSIX
+from xpra.util import envint, envbool, csv
 from xpra.client.mixins.stub_client_mixin import StubClientMixin
 from xpra.scripts.config import parse_with_unit
 from xpra.log import Logger
@@ -20,7 +17,6 @@ from xpra.log import Logger
 log = Logger("network")
 bandwidthlog = Logger("bandwidth")
 
-SSH_AGENT = envbool("XPRA_SSH_AGENT", True)
 FAKE_BROKEN_CONNECTION = envint("XPRA_FAKE_BROKEN_CONNECTION")
 PING_TIMEOUT = envint("XPRA_PING_TIMEOUT", 60)
 MIN_PING_TIMEOUT = envint("XPRA_MIN_PING_TIMEOUT", 2)
@@ -31,20 +27,16 @@ LOG_INFO_RESPONSE = os.environ.get("XPRA_LOG_INFO_RESPONSE", "")
 AUTO_BANDWIDTH_PCT = envint("XPRA_AUTO_BANDWIDTH_PCT", 80)
 assert 1<AUTO_BANDWIDTH_PCT<=100, "invalid value for XPRA_AUTO_BANDWIDTH_PCT: %i" % AUTO_BANDWIDTH_PCT
 
-LOCAL_JITTER = envint("XPRA_LOCAL_JITTER", 0)
-WAN_JITTER = envint("XPRA_WAN_JITTER", 20)
-WIRELESS_JITTER = envint("XPRA_WIRELESS_JITTER", 1000)
 
-
+"""
+Mixin for adding server / network state monitoring functions:
+- ping and echo
+- info request and response
+"""
 class NetworkState(StubClientMixin):
-    """
-    Mixin for adding server / network state monitoring functions:
-    - ping and echo
-    - info request and response
-    """
 
     def __init__(self):
-        super().__init__()
+        StubClientMixin.__init__(self)
         self.server_start_time = -1
         #legacy:
         self.compression_level = 0
@@ -54,7 +46,7 @@ class NetworkState(StubClientMixin):
 
         #bandwidth
         self.bandwidth_limit = 0
-        self.bandwidth_detection = False
+        self.bandwidth_detection = True
         self.server_bandwidth_limit_change = False
         self.server_bandwidth_limit = 0
         self.server_session_name = None
@@ -64,7 +56,6 @@ class NetworkState(StubClientMixin):
         self.info_request_pending = False
 
         #network state:
-        self.server_packet_encoders = ()
         self.server_ping_latency = deque(maxlen=1000)
         self.server_load = None
         self.client_ping_latency = deque(maxlen=1000)
@@ -75,7 +66,7 @@ class NetworkState(StubClientMixin):
         self.ping_echo_timeout_timer = None
 
 
-    def init(self, opts):
+    def init(self, opts, _extra_args=()):
         self.pings = opts.pings
         self.bandwidth_limit = parse_with_unit("bandwidth-limit", opts.bandwidth_limit)
         self.bandwidth_detection = opts.bandwidth_detection
@@ -88,88 +79,29 @@ class NetworkState(StubClientMixin):
         self.cancel_ping_echo_timeout_timer()
 
 
-    def get_info(self) -> dict:
-        return {
-            "network" : {
-                "bandwidth-limit"       : self.bandwidth_limit,
-                "bandwidth-detection"   : self.bandwidth_detection,
-                "server-ok"             : self._server_ok,
-                }
-            }
-
-    def get_caps(self) -> dict:
-        caps = {
-            "network-state" : True,
-            "info-namespace" : True,            #v4 servers assume this is always supported
-            }
-        ssh_auth_sock = os.environ.get("SSH_AUTH_SOCK")
-        if SSH_AGENT and ssh_auth_sock and os.path.isabs(ssh_auth_sock):
-            #ensure agent forwarding is actually requested?
-            #(checking the socket type is not enough:
-            # one could still bind mount the path and connect via tcp! why though?)
-            #meh: if the transport doesn't have agent forwarding enabled,
-            # then it won't create a server-side socket
-            # and nothing will happen,
-            # exposing this client-side path is no big deal
-            caps["ssh-auth-sock"] = ssh_auth_sock
+    def get_caps(self):
+        caps = {"info-namespace" : True}
         #get socket speed if we have it:
         pinfo = self._protocol.get_info()
         device_info = pinfo.get("socket", {}).get("device", {})
         connection_data = {}
-        try:
-            coptions = self._protocol._conn.options
-        except AttributeError:
-            coptions = {}
-        log("get_caps() device_info=%s, connection options=%s", device_info, coptions)
-        def device_value(attr, conv=str, default_value=""):
-            #first try an env var:
-            v = os.environ.get("XPRA_NETWORK_%s" % attr.upper().replace("-", "_"))
-            #next try device options (ie: from connection URI)
-            if v is None:
-                v = coptions.get("socket.%s" % attr)
-            #last: the OS may know:
-            if v is None:
-                v = device_info.get(attr)
-            if v is not None:
-                try:
-                    return conv(v)
-                except (ValueError, TypeError) as e:
-                    log("device_value%s", (attr, conv, default_value), exc_info=True)
-                    log.warn("Warning: invalid value for network attribute '%s'", attr)
-                    log.warn(" %r: %s", v, e)
-            return default_value
-        def parse_speed(v):
-            return parse_with_unit("speed", v)
-        #network interface speed:
-        socket_speed = device_value("speed", parse_speed, 0)
-        log("get_caps() found socket_speed=%s", socket_speed)
+        socket_speed = envint("XPRA_NETWORK_ADAPTER_SPEED", device_info.get("speed", 0))
         if socket_speed:
             connection_data["speed"] = socket_speed
-        default_adapter_type = device_value("adapter-type")
-        log("get_caps() found default adapter-type=%s", default_adapter_type)
-        device_name = device_value("name")
-        log("get_caps() found device name=%s", device_name)
-        jitter = device_value("jitter", int, -1)
-        if jitter<0:
-            at = default_adapter_type.lower()
-            if device_name.startswith("wlan") or device_name.startswith("wlp") or device_name.find("wifi")>=0:
-                jitter = WIRELESS_JITTER
-                device_info["adapter-type"] = "wireless"
-            elif device_name=="lo":
-                jitter = LOCAL_JITTER
-                device_info["adapter-type"] = "loopback"
-            elif any(at.find(x)>=0 for x in ("ether", "local", "fiber", "1394", "infiniband")):
-                jitter = LOCAL_JITTER
-            elif at.find("wan")>=0:
-                jitter = WAN_JITTER
-            elif at.find("wireless")>=0 or at.find("wlan")>=0 or at.find("wifi")>=0 or at.find("80211")>=0:
-                jitter = WIRELESS_JITTER
-        if jitter>=0:
-            connection_data["jitter"] = jitter
-        adapter_type = device_value("adapter-type", str, default_adapter_type)
+        adapter_type = os.environ.get("XPRA_NETWORK_ADAPTER_TYPE", device_info.get("adapter-type"))
+        log("get_caps() found adapter-type=%s", adapter_type)
         if adapter_type:
-            connection_data["adapter-type"] = adapter_type
-        log("get_caps() connection-data=%s", connection_data)
+            at = adapter_type.lower()
+            if any(at.find(x)>=0 for x in ("ethernet", "local", "fiber", "1394")):
+                jitter = 0
+            elif at.find("wan")>=0:
+                jitter = 20
+            elif at.find("wireless")>=0 or at.find("wifi")>=0 or at.find("80211")>=0:
+                jitter = 1000
+            else:
+                jitter = None
+            if jitter is not None:
+                connection_data["jitter"] = jitter
         caps["connection-data"] = connection_data
         bandwidth_limit = self.bandwidth_limit
         bandwidthlog("bandwidth-limit setting=%s, socket-speed=%s", self.bandwidth_limit, socket_speed)
@@ -186,7 +118,8 @@ class NetworkState(StubClientMixin):
         caps["ping-echo-sourceid"] = True
         return caps
 
-    def parse_server_capabilities(self, c : typedict) -> bool:
+    def parse_server_capabilities(self):
+        c = self.server_capabilities
         #make sure the server doesn't provide a start time in the future:
         import time
         self.server_start_time = min(time.time(), c.intget("start_time", -1))
@@ -194,10 +127,9 @@ class NetworkState(StubClientMixin):
         self.server_bandwidth_limit = c.intget("network.bandwidth-limit")
         bandwidthlog("server_bandwidth_limit_change=%s, server_bandwidth_limit=%s",
                      self.server_bandwidth_limit_change, self.server_bandwidth_limit)
-        self.server_packet_encoders = tuple(x for x in ALL_ENCODERS if c.boolget(x, False))
         return True
 
-    def process_ui_capabilities(self, caps : typedict):
+    def process_ui_capabilities(self):
         self.send_deflate_level()
         self.send_ping()
         if self.pings>0:
@@ -233,23 +165,26 @@ class NetworkState(StubClientMixin):
     def send_info_request(self, *categories):
         if not self.info_request_pending:
             self.info_request_pending = True
-            window_ids = () #no longer used or supported by servers
+            window_ids = ()	#no longer used or supported by servers
             self.send("info-request", [self.uuid], window_ids, categories)
 
 
     ######################################################################
     # network and status:
-    def server_ok(self) -> bool:
+    def server_ok(self):
         return self._server_ok
 
     def check_server_echo(self, ping_sent_time):
-        self.ping_echo_timers.pop(ping_sent_time, None)
+        try:
+            del self.ping_echo_timers[ping_sent_time]
+        except KeyError:
+            pass
         if self._protocol is None:
             #no longer connected!
             return False
         last = self._server_ok
         if FAKE_BROKEN_CONNECTION>0:
-            self._server_ok = (int(monotonic()) % FAKE_BROKEN_CONNECTION) <= (FAKE_BROKEN_CONNECTION//2)
+            self._server_ok = (int(monotonic_time()) % FAKE_BROKEN_CONNECTION) <= (FAKE_BROKEN_CONNECTION//2)
         else:
             self._server_ok = self.last_ping_echoed_time>=ping_sent_time
         if not self._server_ok:
@@ -278,14 +213,10 @@ class NetworkState(StubClientMixin):
         log("check_echo_timeout(%s) last_ping_echoed_time=%s", ping_time, self.last_ping_echoed_time)
         if self.last_ping_echoed_time<ping_time:
             #no point trying to use disconnect_and_quit() to tell the server here..
-            self.warn_and_quit(ExitCode.CONNECTION_LOST, "server ping timeout - waited %s seconds without a response" % PING_TIMEOUT)
+            self.warn_and_quit(1, "server ping timeout - waited %s seconds without a response" % PING_TIMEOUT)
 
     def send_ping(self):
-        p = self._protocol
-        if not p or p.TYPE!="xpra":
-            self.ping_timer = None
-            return False
-        now_ms = int(1000.0*monotonic())
+        now_ms = int(1000.0*monotonic_time())
         self.send("ping", now_ms)
         wait = 2.0
         spl = tuple(self.server_ping_latency)
@@ -303,11 +234,11 @@ class NetworkState(StubClientMixin):
         echoedtime, l1, l2, l3, cl = packet[1:6]
         self.last_ping_echoed_time = echoedtime
         self.check_server_echo(0)
-        server_ping_latency = monotonic()-echoedtime/1000.0
-        self.server_ping_latency.append((monotonic(), server_ping_latency))
+        server_ping_latency = monotonic_time()-echoedtime/1000.0
+        self.server_ping_latency.append((monotonic_time(), server_ping_latency))
         self.server_load = l1, l2, l3
         if cl>=0:
-            self.client_ping_latency.append((monotonic(), cl/1000.0))
+            self.client_ping_latency.append((monotonic_time(), cl/1000.0))
         log("ping echo server load=%s, measured client latency=%sms", self.server_load, cl)
 
     def _process_ping(self, packet):
@@ -338,8 +269,7 @@ class NetworkState(StubClientMixin):
         self.send_deflate_level()
 
     def send_deflate_level(self):
-        p = self._protocol
-        if p and p.TYPE=="xpra":
+        if self._protocol:
             self._protocol.set_compression_level(self.compression_level)
             self.send("set_deflate", self.compression_level)
 

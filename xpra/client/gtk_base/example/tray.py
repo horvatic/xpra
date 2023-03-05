@@ -1,36 +1,32 @@
-#!/usr/bin/env python3
-# Copyright (C) 2018-2021 Antoine Martin <antoine@xpra.org>
+#!/usr/bin/env python
+# Copyright (C) 2018 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
-from xpra.platform import program_context
+#test application for tray and menu
+
+from xpra.gtk_common.gobject_compat import import_gtk, import_glib, is_gtk3
+from xpra.gtk_common.gtk_util import scaled_image, pixbuf_new_from_file
 from xpra.platform.gui import get_native_tray_menu_helper_class, get_native_tray_classes
 from xpra.platform.paths import get_icon_filename
-from xpra.gtk_common.gtk_util import scaled_image
 from xpra.log import Logger
 
-import gi
-gi.require_version("Gtk", "3.0")
-from gi.repository import GLib, Gtk, GdkPixbuf
-
 log = Logger("client")
+
+gtk = import_gtk()
+glib = import_glib()
 
 
 class FakeApplication:
 
     def __init__(self):
-        self.idle_add = GLib.idle_add
-        self.timeout_add = GLib.timeout_add
-        self.source_remove = GLib.source_remove
-        self.display_desc = {}
+        self.idle_add = glib.idle_add
+        self.timeout_add = glib.timeout_add
+        self.source_remove = glib.source_remove
         self.session_name = "Test System Tray"
         self.mmap_enabled = False
         self.windows_enabled = True
         self.readonly = False
-        self.opengl_enabled = False
-        self.modal_windows = False
-        self.server_bell = False
-        self.server_cursors = False
         self.server_readonly = False
         self.server_client_shutdown = True
         self.server_sharing = True
@@ -42,14 +38,6 @@ class FakeApplication:
         self.server_webcam = True
         self.server_sound_send = True
         self.server_sound_receive = True
-        self.server_clipboard = False
-        self.server_bandwidth_limit_change = 0
-        self.server_encodings = ["png", "rgb"]
-        self.server_encodings_with_quality = []
-        self.server_encodings_with_speed = []
-        self.server_start_new_commands = True
-        self.server_xdg_menu = False
-        self.server_commands_info = None
         self.speaker_allowed = True
         self.speaker_enabled = True
         self.microphone_enabled = True
@@ -62,7 +50,6 @@ class FakeApplication:
         self.client_supports_bell = True
         self.client_supports_sharing = True
         self.client_lock = False
-        self.download_server_log = None
         self.remote_file_transfer = True
         self.remote_file_transfer_ask = True
         self.notifications_enabled = False
@@ -80,14 +67,11 @@ class FakeApplication:
         self.yscale = 1.0
         self.quality = 80
         self.speed = 50
-        self.encoding = "png"
-        self.send_download_request = None
-        self._remote_subcommands = ()
-        def noop(*_args):
-            pass
-        self._process_encodings = noop
         try:
-            from xpra.client.gtk3.tray_menu import GTK3TrayMenu as GTKTrayMenu
+            if is_gtk3():
+                from xpra.client.gtk3.tray_menu import GTK3TrayMenu as GTKTrayMenu
+            else:
+                from xpra.client.gtk2.tray_menu import GTK2TrayMenu as GTKTrayMenu
         except ImportError as e:
             log.warn("failed to load GTK tray menu class: %s", e)
         for x in (get_native_tray_menu_helper_class(), GTKTrayMenu):
@@ -102,7 +86,7 @@ class FakeApplication:
             from xpra.client.gtk_base.statusicon_tray import GTKStatusIconTray
         except ImportError:
             GTKStatusIconTray = None
-        for x in get_native_tray_classes()+[GTKStatusIconTray]:
+        for x in (get_native_tray_classes()+[GTKStatusIconTray]):
             if x:
                 try:
                     XPRA_APP_ID = 0
@@ -124,8 +108,8 @@ class FakeApplication:
         pass
 
     def get_encodings(self):
-        from xpra.codecs.codec_constants import PREFERRED_ENCODING_ORDER
-        return PREFERRED_ENCODING_ORDER
+        from xpra.codecs.codec_constants import PREFERED_ENCODING_ORDER
+        return PREFERED_ENCODING_ORDER
 
     def show_start_new_command(self, *_args):
         pass
@@ -147,7 +131,7 @@ class FakeApplication:
             icon_filename = get_icon_filename(icon_name)
             if not icon_filename:
                 return None
-            pixbuf = GdkPixbuf.Pixbuf.new_from_file(icon_filename)
+            pixbuf = pixbuf_new_from_file(icon_filename)
             if not pixbuf:
                 return  None
             return scaled_image(pixbuf, size)
@@ -168,24 +152,20 @@ class FakeApplication:
 
     def xpra_tray_exit(self, *args):
         log("xpra_tray_exit%s", args)
-        Gtk.main_quit()
+        gtk.main_quit()
 
     def xpra_tray_geometry(self, *args):
         log("xpra_tray_geometry%s geometry=%s", args, self.tray.get_geometry())
 
 
-    def disconnect_and_quit(self, *_args):
-        Gtk.main_quit()
-
 
 def main():
-    with program_context("tray", "Tray"):
-        from xpra.gtk_common.gobject_compat import register_os_signals
-        def signal_handler(*_args):
-            Gtk.main_quit()
-        register_os_signals(signal_handler)
-        FakeApplication()
-        Gtk.main()
+    import signal
+    def signal_handler(*_args):
+        gtk.main_quit()
+    signal.signal(signal.SIGINT, signal_handler)
+    FakeApplication()
+    gtk.main()
 
 
 if __name__ == "__main__":

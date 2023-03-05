@@ -1,13 +1,18 @@
 # This file is part of Xpra.
-# Copyright (C) 2013-2020 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2013-2019 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
-import os
+#pylint: disable=wrong-import-position
 
-from gi.repository import GObject, Gdk               #@UnresolvedImport
+import gi
+
+gi.require_version('Gdk', '3.0')                #@UndefinedVariable
+from gi.repository import GObject               #@UnresolvedImport
+from gi.repository import Gdk                   #@UnresolvedImport
 
 from xpra.os_util import OSX, POSIX, is_Wayland
+from xpra.gtk_common.gobject_compat import register_os_signals
 from xpra.client.gtk_base.gtk_client_base import GTKXpraClient
 from xpra.client.gtk3.client_window import ClientWindow
 from xpra.platform.gui import get_xdpi, get_ydpi
@@ -17,28 +22,30 @@ class XpraClient(GTKXpraClient):
 
     ClientWindowClass = ClientWindow
 
-    def __repr__(self):  #pylint: disable=arguments-differ
+    def __repr__(self):
         return "gtk3.client"
 
-    def client_type(self) -> str:
+    def client_type(self):
         return "Python/GTK3"
 
-    def client_toolkit(self) -> str:
+    def client_toolkit(self):
         if POSIX and not OSX:
-            backend = os.environ.get("GDK_BACKEND", "")
-            if not backend and is_Wayland():
-                backend = "Wayland"
-            if backend:
-                #capitalize, ie: "x11" -> "X11"
-                backend = backend[0].upper()+backend[1:]
-                return f"GTK3 {backend}"
+            if is_Wayland():
+                return "GTK3 Wayland"
+            return "GTK3 X11"
         return "GTK3"
 
 
+    def install_signal_handlers(self):
+        #only register the glib signal handler
+        #once the main loop is running,
+        #before that we just trigger a KeyboardInterrupt
+        from xpra.gtk_common.gobject_compat import import_glib
+        import_glib().idle_add(register_os_signals, self.handle_app_signal)
+
     def get_notifier_classes(self):
-        ncs = super().get_notifier_classes()
+        ncs = GTKXpraClient.get_notifier_classes(self)
         if not OSX:
-            # pylint: disable=import-outside-toplevel
             try:
                 from xpra.client.gtk3.gtk3_notifier import GTK3_Notifier
                 ncs.append(GTK3_Notifier)
@@ -49,20 +56,20 @@ class XpraClient(GTKXpraClient):
                 log.warn(" %s", e)
         return ncs
 
-    def get_screen_resolution(self) -> int:
+    def get_screen_resolution(self):
         screen = Gdk.Screen.get_default()
         if not screen:
             #wayland?
             return -1
         return screen.get_resolution()
 
-    def get_xdpi(self) -> int:
+    def get_xdpi(self):
         xdpi = get_xdpi()
         if xdpi>0:
             return xdpi
         return self.get_screen_resolution()
 
-    def get_ydpi(self) -> int:
+    def get_ydpi(self):
         ydpi = get_ydpi()
         if ydpi>0:
             return ydpi
@@ -70,7 +77,6 @@ class XpraClient(GTKXpraClient):
 
 
     def get_tray_menu_helper_class(self):
-        # pylint: disable=import-outside-toplevel
         from xpra.client.gtk3.tray_menu import GTK3TrayMenu
         return GTK3TrayMenu
 
