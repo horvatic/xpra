@@ -6,6 +6,8 @@
 import sys
 
 from xpra.client.gl.gl_window_backing_base import GLWindowBackingBase
+from xpra.gtk_common.gobject_compat import import_glib, import_gtk, gtk_version
+from xpra.gtk_common.gtk_util import POINTER_MOTION_MASK, POINTER_MOTION_HINT_MASK
 from xpra.platform.gl_context import GLContext
 from xpra.log import Logger
 
@@ -14,19 +16,19 @@ if not GLContext:
 
 log = Logger("opengl", "paint")
 
-import gi
-from gi.repository import GLib as glib, Gtk as gtk, Gdk as gdk
+glib = import_glib()
+gtk = import_gtk()
 
 
 class GLDrawingArea(GLWindowBackingBase):
 
     def __repr__(self):
-        return "gtk%i.GLDrawingArea(%s, %s, %s)" % (3, self.wid, self.size, self.pixel_format)
+        return "gtk%i.GLDrawingArea(%s, %s, %s)" % (gtk_version(), self.wid, self.size, self.pixel_format)
 
     def idle_add(self, *args, **kwargs):
         glib.idle_add(*args, **kwargs)
 
-    def init_gl_config(self, window_alpha):
+    def init_gl_config(self, window_alpha=True):
         self.context = GLContext(window_alpha)  #pylint: disable=not-callable
         self.window_context = None
 
@@ -40,7 +42,7 @@ class GLDrawingArea(GLWindowBackingBase):
         #double-buffering is enabled by default anyway, so this is redundant:
         #da.set_double_buffered(True)
         da.set_size_request(*self.size)
-        da.set_events(da.get_events() | gdk.EventMask.POINTER_MOTION_MASK | gdk.EventMask.POINTER_MOTION_HINT_MASK)
+        da.set_events(da.get_events() | POINTER_MOTION_MASK | POINTER_MOTION_HINT_MASK)
         da.show()
         self._backing = da
 

@@ -1,10 +1,13 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # This file is part of Xpra.
-# Copyright (C) 2018, 2019 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2018-2021 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
 import sys
+import os.path
+from io import BytesIO
+from math import cos, sin
 
 from xpra.util import typedict, envint, AdHocStruct, AtomicInteger
 from xpra.os_util import WIN32
@@ -74,6 +77,12 @@ class FakeClient(AdHocStruct):
         self.encoding_defaults = {}
         self.get_window_frame_sizes = get_None
         self._focused = None
+        self._remote_server_mode = "seamless"
+        self.wheel_smooth = False
+        self.pointer_grabbed = None
+        def noop(*_args):
+            """ pretend this method exists and does something """
+        self.find_window = noop
         self.request_frame_extents = noop
         self.server_window_states = ()
         self.server_window_frame_extents = False
@@ -82,6 +91,7 @@ class FakeClient(AdHocStruct):
         self.window_configure_pointer = True
         self.update_focus = noop
         self.handle_key_action = noop
+        self.window_ungrab = noop
         self.idle_add = no_idle_add
         self.timeout_add = no_timeout_add
         self.source_remove = no_source_remove
@@ -97,6 +107,8 @@ class FakeClient(AdHocStruct):
         log("send%s", args)
     def get_current_modifiers(self):
         return ()
+    def get_raw_mouse_position(self):
+        return 0, 0
     def get_mouse_position(self):
         return 0, 0
     def server_ok(self):
@@ -113,6 +125,8 @@ def test_gl_client_window(gl_client_window_class, max_window_size=(1024, 1024), 
         if show:
             x, y = 100, 100
         w, h = 250, 250
+        from xpra.codecs.loader import load_codec
+        load_codec("dec_pillow")
         from xpra.client.window_border import WindowBorder
         border = WindowBorder()
         default_cursor_data = None
@@ -176,4 +190,31 @@ def test_gl_client_window(gl_client_window_class, max_window_size=(1024, 1024), 
         if window:
             window.destroy()
     log("test_gl_client_window(..) draw_result=%s", draw_result)
-    return draw_result
+    return draw_result or {"success" : False, "message" : "not painted on screen"}
+
+
+
+def main(argv):
+    try:
+        if "-v" in argv or "--verbose" in argv:
+            log.enable_debug()
+        opengl_props, gl_client_window_module = get_gl_client_window_module(True)
+        log("do_run_glcheck() opengl_props=%s, gl_client_window_module=%s", opengl_props, gl_client_window_module)
+        gl_client_window_class = gl_client_window_module.GLClientWindow
+        pixel_depth = 0
+        log("do_run_glcheck() gl_client_window_class=%s, pixel_depth=%s", gl_client_window_class, pixel_depth)
+        #if pixel_depth not in (0, 16, 24, 30) and pixel_depth<32:
+        #    pixel_depth = 0
+        draw_result = test_gl_client_window(gl_client_window_class, pixel_depth=pixel_depth, show=True)
+        success = draw_result.pop("success", False)
+        opengl_props.update(draw_result)
+        if not success:
+            opengl_props["safe"] = False
+        return 0
+    except Exception:
+        log("do_run_glcheck(..)", exc_info=True)
+        return 1
+
+if __name__ == "__main__":
+    r = main(sys.argv)
+    sys.exit(r)
