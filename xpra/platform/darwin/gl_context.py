@@ -10,51 +10,16 @@ from Cocoa import (
     NSOpenGLPFADepthSize, NSOpenGLPFADoubleBuffer, NSOpenGLPFAAccumSize,    #@UnresolvedImport
     NSOpenGLPFAStencilSize, NSOpenGLPFAAuxBuffers, NSOpenGLCPSurfaceOpacity, #@UnresolvedImport
     )
-
+from xpra.gtk_common.gtk_util import GDKWindow
 from xpra.client.gl.gl_check import check_PyOpenGL_support
+from xpra.platform.darwin.gdk3_bindings import (    #@UnresolvedImport
+    get_nsview_ptr, enable_transparency,            #@UnresolvedImport
+    )
 from xpra.log import Logger
 
 log = Logger("opengl")
 
-if True:
-    from gi.repository import Gdk as gdk
-    from xpra.platform.darwin.gdk3_bindings import (    #@UnresolvedImport
-        get_nsview_ptr, enable_transparency,            #@UnresolvedImport
-        )
-    def GDKWindow(parent=None, width=1, height=1, window_type=gdk.WindowType.TOPLEVEL,
-                  event_mask=0, wclass=gdk.WindowWindowClass.INPUT_OUTPUT, title=None,
-                  x=None, y=None, override_redirect=False, visual=None, **kwargs):
-        attributes_mask = 0
-        attributes = gdk.WindowAttr()
-        if x is not None:
-            attributes.x = x
-            attributes_mask |= gdk.WindowAttributesType.X
-        if y is not None:
-            attributes.y = y
-            attributes_mask |= gdk.WindowAttributesType.Y
-        #attributes.type_hint = gdk.WindowTypeHint.NORMAL
-        #attributes_mask |= gdk.WindowAttributesType.TYPE_HINT
-        attributes.width = width
-        attributes.height = height
-        attributes.window_type = window_type
-        if title:
-            attributes.title = title
-            attributes_mask |= gdk.WindowAttributesType.TITLE
-        if visual:
-            attributes.visual = visual
-            attributes_mask |= gdk.WindowAttributesType.VISUAL
-        #OR:
-        attributes.override_redirect = override_redirect
-        attributes_mask |= gdk.WindowAttributesType.NOREDIR
-        #events:
-        attributes.event_mask = event_mask
-        #wclass:
-        attributes.wclass = wclass
-        mask = gdk.WindowAttributesType(attributes_mask)
-        return gdk.Window(parent, attributes, mask)
 
-    def make_temp_window(title, window_type=gdk.WindowType.TEMP):
-        return GDKWindow(title=title, window_type=window_type)
 
 class AGLWindowContext:
 
@@ -160,7 +125,8 @@ class AGLContext:
                     conv, const_val = vdef              #ie (bool, NSOpenGLPFAAlphaSize)
                     v = self._get_pfa(const_val, screen)#ie: NSOpenGLPFAAlphaSize=8
                     si[name] = conv(v)                   #ie: bool(8)
-        tmp = make_temp_window("tmp-opengl-check")
+        from gi.repository import Gdk
+        tmp = GDKWindow(window_type=Gdk.WindowType.TEMP, title="tmp-opengl-check")
         with self.get_paint_context(tmp):
             i.update(check_PyOpenGL_support(force_enable))
         tmp.destroy()

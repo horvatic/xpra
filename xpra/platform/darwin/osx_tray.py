@@ -9,7 +9,7 @@ from gi.repository import GdkPixbuf
 from xpra.client.tray_base import TrayBase
 from xpra.gtk_common.gtk_util import get_pixbuf_from_data
 from xpra.platform.darwin.osx_menu import getOSXMenuHelper
-#from xpra.platform.darwin import set_exit_cb
+from xpra.platform.darwin import set_exit_cb
 from xpra.platform.gui import ready as gui_ready
 from xpra.log import Logger
 
@@ -32,7 +32,7 @@ class OSXTray(TrayBase):
         self.set_global_menu()
         self.set_dock_menu()
         self.set_dock_icon()
-        #set_exit_cb(self.quit)
+        set_exit_cb(self.quit)
 
 
     def get_geometry(self):

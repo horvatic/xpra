@@ -23,15 +23,12 @@ def do_get_resources_dir():
     #FUGLY warning: importing gtkosx_application causes the dock to appear,
     #and in some cases we don't want that.. so use the env var XPRA_SKIP_UI as workaround for such cases:
     if not envbool("XPRA_SKIP_UI", False):
+        from xpra.platform.darwin import get_OSXApplication
+        macapp = get_OSXApplication()
         try:
-            from gi.repository import GtkosxApplication
-            try:
-                rsc = GtkosxApplication.gtkosx_application_get_resource_path()
-                debug("get_resources_dir() gtkosx_application_get_resource_path=%s", rsc)
-            except:
-                #maybe we're not running from an app bundle?
-                pass
-        except:
+            rsc = macapp.get_resource_path()
+            debug("get_resources_dir() %s.get_resource_path=%s", macapp, rsc)
+        except Exception:
             global _gtkosx_warning_
             if _gtkosx_warning_ is False:
                 _gtkosx_warning_ = True
@@ -165,13 +162,6 @@ def do_get_desktop_background_paths():
         "/System/Library/CoreServices/DefaultDesktop.jpg",
         "/Library/Desktop Pictures/*jpg",
         ]
-
-
-def do_get_libexec_dir():
-    from xpra.platform.paths import get_app_dir
-    base = get_app_dir()
-    p = os.path.join(base, "Helpers")
-    return p
 
 
 def do_get_sshpass_command():

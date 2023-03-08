@@ -18,7 +18,6 @@ gi.require_version("Pango", "1.0")
 gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import GLib, GdkPixbuf, Pango, GObject, Gtk, Gdk     #@UnresolvedImport
 
-
 log = Logger("gtk", "util")
 screenlog = Logger("gtk", "screen")
 alphalog = Logger("gtk", "alpha")
@@ -1084,4 +1083,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

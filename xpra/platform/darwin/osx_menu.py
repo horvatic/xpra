@@ -1,5 +1,5 @@
 # This file is part of Xpra.
-# Copyright (C) 2011-2018 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2011-2020 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
@@ -224,13 +224,10 @@ class OSXMenuHelper(GTKTrayMenuBase):
         if mixin_features.windows and SHOW_ENCODINGS_MENU:
             encodings_menu = self.make_menu()
             def set_encodings_menu(*_args):
-                #from xpra.codecs.codec_constants import PREFERED_ENCODING_ORDER
-                server_encodings = list(self.client.server_encodings)
-                encodings = [x for x in self.client.get_encodings()]
-                if self.client.server_auto_video_encoding:
-                    encodings.insert(0, "auto")
-                    server_encodings.insert(0, "auto")
-                populate_encodingsmenu(encodings_menu, self.get_current_encoding, self.set_current_encoding, encodings, server_encodings)
+                client_encodings, server_encodings = self.get_encoding_options()
+                from xpra.client.gtk_base.menu_helper import populate_encodingsmenu
+                populate_encodingsmenu(encodings_menu, self.get_current_encoding, self.set_current_encoding,
+                                       client_encodings, server_encodings)
             self.client.after_handshake(set_encodings_menu)
             menus.append(("Encoding", encodings_menu))
         if mixin_features.windows and SHOW_ACTIONS_MENU:
@@ -339,7 +336,7 @@ class OSXMenuHelper(GTKTrayMenuBase):
             self.select_clipboard_menu_option(None, label, CLIPBOARD_LABELS)
         except Exception:
             clipboardlog("failed to select remote clipboard option in menu", exc_info=True)
-        direction_label = "label" #CLIPBOARD_DIRECTION_NAME_TO_LABEL.get(self.client.client_clipboard_direction, "Disabled")
+        direction_label = CLIPBOARD_DIRECTION_NAME_TO_LABEL.get(self.client.client_clipboard_direction, "Disabled")
         clipboardlog("direction(%s)=%s", self.client.client_clipboard_direction, direction_label)
         self.select_clipboard_menu_option(None, direction_label, CLIPBOARD_DIRECTION_LABELS)
 
