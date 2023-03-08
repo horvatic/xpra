@@ -8,7 +8,6 @@ import os
 from gi.repository import GObject, Gdk               #@UnresolvedImport
 
 from xpra.os_util import OSX, POSIX, is_Wayland
-from xpra.gtk_common.gobject_compat import register_os_signals
 from xpra.client.gtk_base.gtk_client_base import GTKXpraClient
 from xpra.client.gtk3.client_window import ClientWindow
 from xpra.platform.gui import get_xdpi, get_ydpi
@@ -35,13 +34,6 @@ class XpraClient(GTKXpraClient):
                 return f"GTK3 {backend}"
         return "GTK3"
 
-
-    def install_signal_handlers(self):
-        #only register the glib signal handler
-        #once the main loop is running,
-        #before that we just trigger a KeyboardInterrupt
-        from xpra.gtk_common.gobject_compat import import_glib
-        import_glib().idle_add(register_os_signals, self.handle_app_signal)
 
     def get_notifier_classes(self):
         ncs = super().get_notifier_classes()
