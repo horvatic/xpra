@@ -75,7 +75,7 @@ class NetworkState(StubClientMixin):
         self.ping_echo_timeout_timer = None
 
 
-    def init(self, opts, *args):
+    def init(self, opts):
         self.pings = opts.pings
         self.bandwidth_limit = parse_with_unit("bandwidth-limit", opts.bandwidth_limit)
         self.bandwidth_detection = opts.bandwidth_detection
@@ -186,8 +186,7 @@ class NetworkState(StubClientMixin):
         caps["ping-echo-sourceid"] = True
         return caps
 
-    def parse_server_capabilities(self) -> bool:
-        c = self.server_capabilities
+    def parse_server_capabilities(self, c : typedict) -> bool:
         #make sure the server doesn't provide a start time in the future:
         import time
         self.server_start_time = min(time.time(), c.intget("start_time", -1))

@@ -56,8 +56,7 @@ class ServerInfoMixin(StubClientMixin):
         self._remote_server_log = None
         self._remote_server_mode = ""
 
-    def parse_server_capabilities(self, c : typedict=None) -> bool:
-        c = self.server_capabilities
+    def parse_server_capabilities(self, c : typedict) -> bool:
         p = self._protocol
         if p.TYPE=="rfb":
             #only the xpra protocol provides the server info

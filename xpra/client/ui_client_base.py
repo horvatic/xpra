@@ -114,6 +114,8 @@ class UIXpraClient(ClientBaseClass):
         self.server_platform = ""
         self.server_session_name = None
 
+        self.window_configure_pointer = True
+
         #features:
         self.opengl_enabled = False
         self.opengl_props = {}
@@ -391,7 +393,7 @@ class UIXpraClient(ClientBaseClass):
 
     def parse_server_capabilities(self):
         for c in CLIENT_BASES:
-            if not c.parse_server_capabilities(self):
+            if not c.parse_server_capabilities(self, self.server_capabilities):
                 log.info("failed to parse server capabilities in %s", c)
                 return  False
         c = self.server_capabilities
@@ -466,7 +468,7 @@ class UIXpraClient(ClientBaseClass):
     def process_ui_capabilities(self):
         for c in CLIENT_BASES:
             if c!=XpraClientBase:
-                c.process_ui_capabilities(self)
+                c.process_ui_capabilities(self, self.server_capabilities)
         #keyboard:
         c = self.server_capabilities
         if self.keyboard_helper:

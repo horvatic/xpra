@@ -905,6 +905,7 @@ class GLWindowBackingBase(WindowBackingBase):
         return True
 
     def set_cursor_data(self, cursor_data):
+        return
         if (not cursor_data or len(cursor_data)==1) and self.default_cursor_data:
             cursor_data = ["raw"] + self.default_cursor_data
         if not cursor_data:
@@ -1010,7 +1011,7 @@ class GLWindowBackingBase(WindowBackingBase):
             self.idle_add(self.gl_paint_planar, YUV2RGB_FULL_SHADER, flush, "jpeg", img, x, y, w, h, width, height, callbacks)
         else:
             img = self.jpeg_decoder.decompress_to_rgb("BGRX", img_data, width, height, options)
-            self.idle_add(self.do_paint_rgb, "BGRX", img.get_pixels(), x, y, width, height, img.get_rowstride(), options, callbacks)
+            self.idle_add(self.do_paint_rgb, "BGRX", img.get_pixels(), x, y, width, height, width, height, img.get_rowstride(), options, callbacks)
 
     def paint_webp(self, img_data, x, y, width, height, options, callbacks):
         subsampling = options.strget("subsampling")
@@ -1022,7 +1023,7 @@ class GLWindowBackingBase(WindowBackingBase):
             return
         WindowBackingBase.paint_webp(self, img_data, x, y, width, height, options, callbacks)
 
-    def do_paint_rgb(self, rgb_format, img_data, x, y, width, height, rowstride, options, callbacks):
+    def do_paint_rgb(self, rgb_format, img_data, x, y, sw, sh, width, height, rowstride, options, callbacks):
         log("%s.do_paint_rgb(%s, %s bytes, x=%d, y=%d, width=%d, height=%d, rowstride=%d, options=%s)",
             self, rgb_format, len(img_data), x, y, width, height, rowstride, options)
         context = self.gl_context()

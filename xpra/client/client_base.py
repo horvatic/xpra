@@ -824,9 +824,9 @@ class XpraClientBase(ServerInfoMixin, FilePrintMixin):
         return True
 
 
-    def parse_server_capabilities(self):
+    def parse_server_capabilities(self, c):
         for c in XpraClientBase.__bases__:
-            if not c.parse_server_capabilities(self):
+            if not c.parse_server_capabilities(self, self.server_capabilities):
                 return False
         self.server_client_shutdown = self.server_capabilities.boolget("client-shutdown", True)
         self.server_compressors = self.server_capabilities.strlistget("compressors", ["zlib"])

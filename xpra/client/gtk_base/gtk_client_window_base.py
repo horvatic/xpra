@@ -525,7 +525,7 @@ class GTKClientWindowBase(ClientWindowBase, gtk.Window):
         if decorations is not None:
             #honour the flag given by the server:
             return bool(decorations)
-        if self._client.server_window_decorations:
+        if True: #self._client.server_window_decorations:
             #rely on the server to tell us when to turn decorations off
             return True
         #older servers don't tell us if we need decorations, so take a guess:

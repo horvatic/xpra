@@ -50,8 +50,7 @@ class FilePrintMixin(StubClientMixin, FileTransferHandler):
         self.cleanup_printing()
         FileTransferHandler.cleanup(self)
 
-    def parse_server_capabilities(self, c : typedict=None) -> bool:
-        c = self.server_capabilities
+    def parse_server_capabilities(self, c : typedict) -> bool:
         self.parse_printing_capabilities(c)
         self.parse_file_transfer_caps(c)
         self.remote_request_file = c.boolget("request-file", False)

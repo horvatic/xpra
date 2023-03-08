@@ -74,7 +74,7 @@ class StubClientMixin:
         """
         return {}
 
-    def parse_server_capabilities(self, c : typedict=None) -> bool:  #pylint: disable=unused-argument
+    def parse_server_capabilities(self, c : typedict) -> bool:  #pylint: disable=unused-argument
         """
         Parse server attributes specified in the hello capabilities.
         This runs in a non-UI thread.

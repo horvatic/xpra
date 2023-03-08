@@ -760,7 +760,7 @@ class GTKXpraClient(GObjectXpraClient, UIXpraClient):
         if self._protocol._conn.socktype=="udp":
             #lossy protocol means we can't use delta regions:
             log("no delta buckets with udp, since we can drop paint packets")
-            window_backing_base.DELTA_BUCKETS = 0
+        window_backing_base.DELTA_BUCKETS = 0
         updict(capabilities, "encoding", {
                     "delta_buckets"     : window_backing_base.DELTA_BUCKETS,
                     })
