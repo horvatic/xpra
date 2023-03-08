@@ -1,17 +1,18 @@
 # This file is part of Xpra.
-# Copyright (C) 2018-2019 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2018-2022 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 #pylint: disable-msg=E1101
 
 import os
+from time import monotonic
 from threading import RLock
 
 from xpra.log import Logger
 from xpra.scripts.config import FALSE_OPTIONS
 from xpra.net import compression
-from xpra.os_util import OSEnvContext, monotonic_time, WIN32, BITS
-from xpra.util import envint, envbool, csv, XPRA_WEBCAM_NOTIFICATION_ID
+from xpra.os_util import OSEnvContext, WIN32
+from xpra.util import envint, envbool, csv, typedict, XPRA_WEBCAM_NOTIFICATION_ID
 from xpra.client.mixins.stub_client_mixin import StubClientMixin
 
 
@@ -21,15 +22,15 @@ WEBCAM_ALLOW_VIRTUAL = envbool("XPRA_WEBCAM_ALLOW_VIRTUAL", False)
 WEBCAM_TARGET_FPS = max(1, min(50, envint("XPRA_WEBCAM_FPS", 20)))
 
 
-"""
-Utility superclass for clients that forward webcams
-"""
 class WebcamForwarder(StubClientMixin):
+    """
+    Mixin for clients that forward webcams
+    """
 
     __signals__ = ["webcam-changed"]
 
     def __init__(self):
-        StubClientMixin.__init__(self)
+        super().__init__()
         #webcam:
         self.webcam_option = ""
         self.webcam_forwarding = False
@@ -42,22 +43,22 @@ class WebcamForwarder(StubClientMixin):
         self.server_webcam = False
         self.server_virtual_video_devices = 0
         if not hasattr(self, "send"):
-            self.send = self.noop
+            def nosend(*_args):
+                """
+                pretend to have a send method for testing
+                """
+            self.send = nosend
         #duplicated from encodings mixin:
         self.server_encodings = []
         if not hasattr(self, "server_ping_latency"):
             from collections import deque
             self.server_ping_latency = deque(maxlen=1000)
 
-    def noop(self, *_args):
-        pass
-
-
     def cleanup(self):
         self.stop_sending_webcam()
 
 
-    def init(self, opts, _extra_args=()):
+    def init(self, opts):
         self.webcam_option = opts.webcam
         self.webcam_forwarding = self.webcam_option.lower() not in FALSE_OPTIONS
         self.server_webcam = False
@@ -73,23 +74,22 @@ class WebcamForwarder(StubClientMixin):
                 except ImportError as e:
                     log("init webcam failure", exc_info=True)
                     if WIN32:
-                        log.info("no support webcam forwarding on MS Windows")
-                    else:
                         log.info("opencv not found:")
                         log.info(" %s", e)
-                        log.info(" webcam forwarding is disabled")
+                        log.info(" webcam forwarding is not available")
                     self.webcam_forwarding = False
         log("webcam forwarding: %s", self.webcam_forwarding)
 
-    def get_caps(self):
+
+    def get_caps(self) -> dict:
         if not self.webcam_forwarding:
             return {}
         return {"webcam" : True}
 
-    def parse_server_capabilities(self):
-        c = self.server_capabilities
+
+    def parse_server_capabilities(self, c : typedict) -> bool:
         self.server_webcam = c.boolget("webcam")
-        self.server_webcam_encodings = c.strlistget("webcam.encodings", ("png", "jpeg"))
+        self.server_webcam_encodings = c.strtupleget("webcam.encodings", ("png", "jpeg"))
         self.server_virtual_video_devices = c.intget("virtual-video-devices")
         log("webcam server support: %s (%i devices, encodings: %s)",
             self.server_webcam, self.server_virtual_video_devices, csv(self.server_webcam_encodings))
@@ -109,6 +109,7 @@ class WebcamForwarder(StubClientMixin):
             self.do_start_sending_webcam(self.webcam_option)
 
     def do_start_sending_webcam(self, device_str):
+        self.show_progress(100, "forwarding webcam")
         assert self.server_webcam
         device = 0
         virt_devices, all_video_devices, non_virtual = {}, {}, {}
@@ -151,7 +152,7 @@ class WebcamForwarder(StubClientMixin):
         self.webcam_frame_no = 0
         try:
             #test capture:
-            webcam_device = cv2.VideoCapture(device)        #0 -> /dev/video0
+            webcam_device = cv2.VideoCapture(device)        #0 -> /dev/video0 @UndefinedVariable
             ret, frame = webcam_device.read()
             log("test capture using %s: %s, %s", webcam_device, ret, frame is not None)
             assert ret, "no device or permission"
@@ -256,25 +257,25 @@ class WebcamForwarder(StubClientMixin):
             preferred_order = ["jpeg", "png", "png/L", "png/P", "webp"]
             formats = [x for x in preferred_order if x in common_encodings] + common_encodings
             encoding = formats[0]
-            start = monotonic_time()
+            start = monotonic()
             import cv2
             ret, frame = self.webcam_device.read()
             assert ret, "capture failed"
             assert frame.ndim==3, "invalid frame data"
             h, w, Bpp = frame.shape
             assert Bpp==3 and frame.size==w*h*Bpp
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            end = monotonic_time()
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)  # @UndefinedVariable
+            end = monotonic()
             log("webcam frame capture took %ims", (end-start)*1000)
-            start = monotonic_time()
-            from PIL import Image
+            start = monotonic()
+            from PIL import Image  # @UnresolvedImport
             from io import BytesIO
             image = Image.fromarray(rgb)
             buf = BytesIO()
             image.save(buf, format=encoding)
             data = buf.getvalue()
             buf.close()
-            end = monotonic_time()
+            end = monotonic()
             log("webcam frame compression to %s took %ims", encoding, (end-start)*1000)
             frame_no = self.webcam_frame_no
             self.webcam_frame_no += 1

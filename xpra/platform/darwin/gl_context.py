@@ -56,13 +56,7 @@ if True:
     def make_temp_window(title, window_type=gdk.WindowType.TEMP):
         return GDKWindow(title=title, window_type=window_type)
 
-else:
-    enable_transparency = None
-    def get_nsview_ptr(window):
-        return window.nsview
-
-
-class AGLWindowContext(object):
+class AGLWindowContext:
 
     def __init__(self, gl_context, nsview):
         self.gl_context = gl_context
@@ -83,8 +77,12 @@ class AGLWindowContext(object):
         self.gl_context.flushBuffer()
 
     def update_geometry(self):
+        """
+        The window has been resized,
+        the gl context must be updated.
+        """
         glc = self.gl_context
-        log.warn("update() gl_context=%s", glc)
+        log("update_geometry() gl_context=%s", glc)
         if glc:
             glc.update()
 
@@ -99,7 +97,7 @@ class AGLWindowContext(object):
         return "AGLWindowContext(%s, %s)" % (self.gl_context, self.nsview)
 
 
-class AGLContext(object):
+class AGLContext:
 
     def __init__(self, alpha=True):
         self.alpha = alpha
@@ -183,6 +181,8 @@ class AGLContext(object):
     def get_paint_context(self, gdk_window):
         nsview_ptr = get_nsview_ptr(gdk_window)
         if self.window_context and self.nsview_ptr!=nsview_ptr:
+            log("get_paint_context(%s) nsview_ptr has changed, was %#x, now %#x - destroying window context",
+                gdk_window, nsview_ptr, self.nsview_ptr)
             self.window_context.destroy()
             self.window_context = None
         if not self.window_context:
@@ -200,6 +200,7 @@ class AGLContext(object):
 
     def destroy(self):
         c = self.window_context
+        log("AGLContext.destroy() window_context=%s", c)
         if c:
             self.window_context = None
             c.destroy()
@@ -210,7 +211,7 @@ class AGLContext(object):
         self.pixel_format = None
 
     def __repr__(self):
-        return "AGLContext(%s)" % self.pixel_format
+        return "AGLContext(%#x)" % (self.nsview_ptr or 0)
 
 
 GLContext = AGLContext

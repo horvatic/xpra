@@ -1,6 +1,6 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # This file is part of Xpra.
-# Copyright (C) 2018 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2018-2022 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
@@ -9,7 +9,7 @@ import glob
 import os.path
 
 from xpra.util import engs
-from xpra.os_util import hexstr, osexpand, load_binary_file, use_tty
+from xpra.os_util import hexstr, osexpand, load_binary_file, use_gui_prompt
 from xpra.platform.paths import get_user_conf_dirs
 from xpra.log import Logger
 
@@ -21,25 +21,22 @@ APP_ID = os.environ.get("XPRA_U2F_APP_ID", "Xpra")
 def main():
     from xpra.platform import program_context
     with program_context("U2F-Register", "Xpra U2F Registration Tool"):
-        if not use_tty():
-            from xpra.gtk_common.gobject_compat import import_gtk, import_glib
-            gtk = import_gtk()
-            glib = import_glib()
-            from xpra.gtk_common.gtk_util import MESSAGE_INFO, MESSAGE_ERROR, BUTTONS_CLOSE
+        if use_gui_prompt():
+            from gi.repository import GLib, Gtk  # @UnresolvedImport
             def show_dialog(mode, *msgs):
-                dialog = gtk.MessageDialog(None, 0, mode,
-                              BUTTONS_CLOSE, "\n".join(msgs))
+                dialog = Gtk.MessageDialog(None, 0, mode,
+                              Gtk.ButtonsType.CLOSE, "\n".join(msgs))
                 dialog.set_title("Xpra U2F Registration Tool")
                 v = dialog.run()
                 dialog.destroy()
                 #run the main loop long enough to destroy the dialog:
-                glib.idle_add(gtk.main_quit)
-                gtk.main()
+                GLib.idle_add(Gtk.main_quit)
+                Gtk.main()
                 return v
             def error(*msgs):
-                return show_dialog(MESSAGE_ERROR, *msgs)
+                return show_dialog(Gtk.MessageType.ERROR, *msgs)
             def info(*msgs):
-                return show_dialog(MESSAGE_INFO, *msgs)
+                return show_dialog(Gtk.MessageType.INFO, *msgs)
         else:
             print("U2F Registration Tool")
             def printmsgs(*msgs):
@@ -48,7 +45,7 @@ def main():
             error = info = printmsgs
 
         key_handle_filenames = [os.path.join(d, "u2f-keyhandle.hex") for d in get_user_conf_dirs()]
-        assert len(key_handle_filenames)>0
+        assert key_handle_filenames
         for filename in key_handle_filenames:
             p = osexpand(filename)
             key_handle_str = load_binary_file(p)
@@ -91,7 +88,7 @@ def main():
         #save to files:
         key_handle_filename = osexpand(key_handle_filenames[0])
         with open(key_handle_filename, "wb") as f:
-            f.write(hexstr(key_handle).encode())
+            f.write(hexstr(key_handle).encode("latin1"))
         #find a filename we can use for this public key:
         i = 1
         while True:
@@ -102,7 +99,7 @@ def main():
             if not os.path.exists(public_key_filename):
                 break
         with open(public_key_filename, "wb") as f:
-            f.write(hexstr(pubkey).encode())
+            f.write(hexstr(pubkey).encode("latin1"))
         #info("key handle: %s" % csv(hex40(key_handle)),
         #     "saved to file '%s'" % key_handle_filename,
         #     "public key: %s" % csv(hex40(pubkey)),
@@ -110,9 +107,9 @@ def main():
         #     )
         info(
             "key handle saved to file:",
-            "'%s'" % key_handle_filename,
+            f"{key_handle_filename!r}",
             "public key saved to file:",
-            "'%s'" % public_key_filename,
+            f"{public_key_filename!r}",
             )
         return 0
 

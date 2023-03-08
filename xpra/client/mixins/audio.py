@@ -1,11 +1,14 @@
 # This file is part of Xpra.
-# Copyright (C) 2010-2018 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2010-2022 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
+
+from gi.repository import GLib  # @UnresolvedImport
 
 from xpra.platform.paths import get_icon_filename
 from xpra.scripts.parsing import sound_option
 from xpra.net.compression import Compressed
+from xpra.net.protocol.constants import CONNECTION_LOST
 from xpra.os_util import get_machine_id, get_user_uuid, bytestostr, OSX, POSIX
 from xpra.util import envint, typedict, csv, updict
 from xpra.client.mixins.stub_client_mixin import StubClientMixin
@@ -15,17 +18,18 @@ avsynclog = Logger("av-sync")
 log = Logger("client", "sound")
 
 AV_SYNC_DELTA = envint("XPRA_AV_SYNC_DELTA")
+DELTA_THRESHOLD = envint("XPRA_AV_SYNC_DELTA_THRESHOLD", 40)
 DEFAULT_AV_SYNC_DELAY = envint("XPRA_DEFAULT_AV_SYNC_DELAY", 150)
 
 
-"""
-Utility superclass for clients that handle audio
-"""
 class AudioClient(StubClientMixin):
+    """
+    Utility mixin for clients that handle audio
+    """
     __signals__ = ["speaker-changed", "microphone-changed"]
 
     def __init__(self):
-        StubClientMixin.__init__(self)
+        super().__init__()
         self.sound_source_plugin = None
         self.speaker_allowed = False
         self.speaker_enabled = False
@@ -52,13 +56,11 @@ class AudioClient(StubClientMixin):
         self.server_sound_encoders = []
         self.server_sound_receive = False
         self.server_sound_send = False
-        self.server_sound_bundle_metadata = False
-        self.server_ogg_latency_fix = False
         self.queue_used_sent = None
         #duplicated from ServerInfo mixin:
         self._remote_machine_id = None
 
-    def init(self, opts, _extra_args=()):
+    def init(self, opts):
         self.av_sync = opts.av_sync
         self.sound_properties = typedict()
         self.speaker_allowed = sound_option(opts.speaker) in ("on", "off")
@@ -87,21 +89,19 @@ class AudioClient(StubClientMixin):
                     from xpra.sound.wrapper import query_sound
                     self.sound_properties = query_sound()
                     assert self.sound_properties, "query did not return any data"
-                    def vinfo(k):
-                        val = self.sound_properties.strlistget(k)
-                        assert val, "%s not found in sound properties" % k
-                        return ".".join(val[:3])
-                    bits = self.sound_properties.intget("python.bits", 32)
-                    log.info("GStreamer version %s for Python %s %s-bit",
-                             vinfo("gst.version"), vinfo("python.version"), bits)
+                    gstv = self.sound_properties.strtupleget("gst.version")
+                    if gstv:
+                        log.info("GStreamer version %s", ".".join(gstv[:3]))
+                    else:
+                        log.info("GStreamer loaded")
                 except Exception as e:
                     log("failed to query sound", exc_info=True)
                     log.error("Error: failed to query sound subsystem:")
-                    log.error(" %s", e)
+                    log.estr(e)
                     self.speaker_allowed = False
                     self.microphone_allowed = False
-        encoders = self.sound_properties.strlistget("encoders", [])
-        decoders = self.sound_properties.strlistget("decoders", [])
+        encoders = self.sound_properties.strtupleget("encoders")
+        decoders = self.sound_properties.strtupleget("decoders")
         self.speaker_codecs = sound_option_or_all("speaker-codec", opts.speaker_codec, decoders)
         self.microphone_codecs = sound_option_or_all("microphone-codec", opts.microphone_codec, encoders)
         if not self.speaker_codecs:
@@ -140,13 +140,34 @@ class AudioClient(StubClientMixin):
             self.stop_receiving_sound()
 
 
-    def get_caps(self):
+    def get_info(self) -> dict:
+        info = {
+            "speaker" : self.speaker_enabled,
+            "microphone" : self.microphone_enabled,
+            "properties" : dict(self.sound_properties),
+            }
+        ss = self.sound_source
+        if ss:
+            info["src"] = ss.get_info()
+        ss = self.sound_sink
+        if ss:
+            info["sink"] = ss.get_info()
+        return {"audio" : info}
+
+
+    def get_caps(self) -> dict:
         d = {}
-        updict(d, "av-sync", self.get_avsync_capabilities())
-        updict(d, "sound", self.get_audio_capabilities())
+        avcaps = self.get_avsync_capabilities()
+        acaps = self.get_audio_capabilities()
+        #legacy flat format:
+        updict(d, "av-sync", avcaps)
+        updict(d, "sound", acaps)
+        #v4.4 namespace:
+        d["av-sync"] = avcaps
+        d["audio"] = acaps
         return d
 
-    def get_audio_capabilities(self):
+    def get_audio_capabilities(self) -> dict:
         if not self.sound_properties:
             return {}
         #we don't know if the server supports new codec names,
@@ -162,38 +183,38 @@ class AudioClient(StubClientMixin):
         log("audio capabilities: %s", caps)
         return caps
 
-    def get_avsync_capabilities(self):
+    def get_avsync_capabilities(self) -> dict:
         if not self.av_sync:
             return {}
+        delay = max(0, DEFAULT_AV_SYNC_DELAY + AV_SYNC_DELTA)
         return {
-            ""              : self.av_sync,
-            "delay.default" : max(0, DEFAULT_AV_SYNC_DELAY + AV_SYNC_DELTA),
+            ""              : True,
+            "enabled"       : True,
+            "delay.default" : delay,
+            "delay"         : delay,
             }
 
 
-    def setup_connection(self, _conn):
-        pass
-
-    def parse_server_capabilities(self):
-        c = self.server_capabilities
+    def parse_server_capabilities(self, c : typedict) -> bool:
         self.server_av_sync = c.boolget("av-sync.enabled")
         avsynclog("av-sync: server=%s, client=%s", self.server_av_sync, self.av_sync)
         self.server_pulseaudio_id = c.strget("sound.pulseaudio.id")
         self.server_pulseaudio_server = c.strget("sound.pulseaudio.server")
-        self.server_sound_decoders = c.strlistget("sound.decoders", ())
-        self.server_sound_encoders = c.strlistget("sound.encoders", ())
+        self.server_sound_decoders = c.strtupleget("sound.decoders")
+        self.server_sound_encoders = c.strtupleget("sound.encoders")
         self.server_sound_receive = c.boolget("sound.receive")
         self.server_sound_send = c.boolget("sound.send")
-        self.server_sound_bundle_metadata = c.boolget("sound.bundle-metadata")
-        self.server_ogg_latency_fix = c.boolget("sound.ogg-latency-fix", False)
         log("pulseaudio id=%s, server=%s, sound decoders=%s, sound encoders=%s, receive=%s, send=%s",
                  self.server_pulseaudio_id, self.server_pulseaudio_server,
                  csv(self.server_sound_decoders), csv(self.server_sound_encoders),
                  self.server_sound_receive, self.server_sound_send)
         if self.server_sound_send and self.speaker_enabled:
+            self.show_progress(90, "starting speaker forwarding")
             self.start_receiving_sound()
         if self.server_sound_receive and self.microphone_enabled:
-            self.idle_add(self.start_sending_sound)
+            #call via idle_add because we may query X11 properties
+            #to find the pulseaudio server:
+            GLib.idle_add(self.start_sending_sound)
         return True
 
 
@@ -317,7 +338,7 @@ class AudioClient(StubClientMixin):
         except Exception as e:
             self.may_notify_audio("Failed to start microphone forwarding", "%s" % e)
             log.error("Error setting up microphone forwarding:")
-            log.error(" %s", e)
+            log.estr(e)
             return False
 
     def new_stream(self, sound_source, codec):
@@ -343,7 +364,7 @@ class AudioClient(StubClientMixin):
             self.emit("microphone-changed")
         self.sound_source = None
         if ss is None:
-            log.warn("Warning: cannot stop sound source which has not been started")
+            log.warn("Warning: cannot stop audio capture which has not been started")
             return
         #tell the server to stop:
         self.send("sound-data", ss.codec or "", "", {
@@ -374,9 +395,6 @@ class AudioClient(StubClientMixin):
                 self.no_matching_codec_error("speaker", self.server_sound_encoders, self.speaker_codecs)
                 return
             codec = matching_codecs[0]
-            if not self.server_ogg_latency_fix and codec in ("flac", "opus", "speex"):
-                log.warn("Warning: this server's sound support is out of date")
-                log.warn(" the sound latency with the %s codec will be high", codec)
             def sink_ready(*args):
                 scodec = codec
                 log("sink_ready(%s) codec=%s (server codec name=%s)", args, codec, scodec)
@@ -425,6 +443,7 @@ class AudioClient(StubClientMixin):
         #not shown in the UI, so don't bother with emitting a signal:
         #self.emit("speaker-changed")
     def sound_sink_error(self, sound_sink, error):
+        log("sound_sink_error(%s, %s) exit_code=%s, current sink=%s", sound_sink, error, self.exit_code, self.sound_sink)
         if self.exit_code is not None:
             #exiting
             return
@@ -476,8 +495,7 @@ class AudioClient(StubClientMixin):
             ss.connect("state-changed", self.sound_sink_state_changed)
             ss.connect("error", self.sound_sink_error)
             ss.connect("exit", self.sound_sink_exit)
-            from xpra.net.protocol import Protocol
-            ss.connect(Protocol.CONNECTION_LOST, self.sound_process_stopped)
+            ss.connect(CONNECTION_LOST, self.sound_process_stopped)
             ss.start()
             log("%s sound sink started", codec)
             return True
@@ -497,22 +515,13 @@ class AudioClient(StubClientMixin):
             self.sound_out_bytecount += len(x)
         metadata["sequence"] = sound_source.sequence
         if packet_metadata:
-            if not self.server_sound_bundle_metadata:
-                #server does not support bundling, send packet metadata as individual packets before the main packet:
-                for x in packet_metadata:
-                    self.send_sound_data(sound_source, x, metadata)
-                packet_metadata = ()
-            else:
-                #the packet metadata is compressed already:
-                packet_metadata = Compressed("packet metadata", packet_metadata, can_inline=True)
+            #the packet metadata is already compressed:
+            packet_metadata = Compressed("packet metadata", packet_metadata, can_inline=True)
         self.send_sound_data(sound_source, data, metadata, packet_metadata)
 
     def send_sound_data(self, sound_source, data, metadata, packet_metadata=None):
         codec = sound_source.codec
-        packet_data = [codec, Compressed(codec, data), metadata]
-        if packet_metadata:
-            assert self.server_sound_bundle_metadata
-            packet_data.append(packet_metadata)
+        packet_data = [codec, Compressed(codec, data), metadata, packet_metadata or ()]
         self.send("sound-data", *packet_data)
 
     def send_sound_sync(self, v):
@@ -572,27 +581,18 @@ class AudioClient(StubClientMixin):
         packet_metadata = ()
         if len(packet)>4:
             packet_metadata = packet[4]
-            if not self.sound_properties.get("bundle-metadata"):
-                #we don't handle bundling, so push individually:
-                for x in packet_metadata:
-                    ss.add_data(x)
-                packet_metadata = ()
         #(some packets (ie: sos, eos) only contain metadata)
         if data or packet_metadata:
             ss.add_data(data, metadata, packet_metadata)
         if self.av_sync and self.server_av_sync:
-            info = ss.get_info()
-            queue_used = info.get("queue.cur")
-            if queue_used is None:
-                qinfo = typedict(info).dictget("queue", None)
-                if qinfo:
-                    queue_used = typedict(qinfo).intget("cur", None)
+            qinfo = typedict(ss.get_info()).dictget("queue")
+            queue_used = typedict(qinfo or {}).intget("cur", None)
             if queue_used is None:
                 return
             delta = (self.queue_used_sent or 0)-queue_used
             #avsynclog("server sound sync: queue info=%s, last sent=%s, delta=%s",
             #    dict((k,v) for (k,v) in info.items() if k.startswith("queue")), self.queue_used_sent, delta)
-            if self.queue_used_sent is None or abs(delta)>=80:
+            if self.queue_used_sent is None or abs(delta)>=DELTA_THRESHOLD:
                 avsynclog("server sound sync: sending updated queue.used=%i (was %s)",
                           queue_used, (self.queue_used_sent or "unset"))
                 self.queue_used_sent = queue_used

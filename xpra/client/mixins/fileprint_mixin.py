@@ -1,9 +1,9 @@
 # This file is part of Xpra.
-# Copyright (C) 2010-2019 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2010-2021 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
-from xpra.util import envbool, csv
+from xpra.util import envbool, envint, csv, typedict
 from xpra.net.file_transfer import FileTransferHandler
 from xpra.client.mixins.stub_client_mixin import StubClientMixin
 from xpra.make_thread import start_thread
@@ -14,6 +14,7 @@ filelog = Logger("file")
 
 DELETE_PRINTER_FILE = envbool("XPRA_DELETE_PRINTER_FILE", True)
 SKIP_STOPPED_PRINTERS = envbool("XPRA_SKIP_STOPPED_PRINTERS", True)
+INIT_PRINTING_DELAY = envint("XPRA_INIT_PRINTING_DELAY", 2)
 
 
 class FilePrintMixin(StubClientMixin, FileTransferHandler):
@@ -24,8 +25,9 @@ class FilePrintMixin(StubClientMixin, FileTransferHandler):
         self.printer_attributes = []
         self.send_printers_timer = 0
         self.exported_printers = None
+        self.remote_request_file = False
 
-    def init(self, opts, _extra_args=()):
+    def init(self, opts):
         #printing and file transfer:
         FileTransferHandler.init_opts(self, opts)
 
@@ -40,7 +42,7 @@ class FilePrintMixin(StubClientMixin, FileTransferHandler):
             }.items():
             self.add_packet_handler(packet_type, handler, False)
 
-    def get_caps(self):
+    def get_caps(self) -> dict:
         return self.get_file_transfer_features()
 
     def cleanup(self):
@@ -48,30 +50,32 @@ class FilePrintMixin(StubClientMixin, FileTransferHandler):
         self.cleanup_printing()
         FileTransferHandler.cleanup(self)
 
-    def parse_server_capabilities(self):
-        self.parse_printing_capabilities()
-        self.parse_file_transfer_caps(self.server_capabilities)
+    def parse_server_capabilities(self, c : typedict=None) -> bool:
+        c = self.server_capabilities
+        self.parse_printing_capabilities(c)
+        self.parse_file_transfer_caps(c)
+        self.remote_request_file = c.boolget("request-file", False)
         return True
 
-    def parse_printing_capabilities(self):
+    def parse_printing_capabilities(self, caps : typedict):
         printlog("parse_printing_capabilities() client printing support=%s", self.printing)
         if self.printing:
-            server_printing = self.server_capabilities.boolget("printing")
+            server_printing = caps.boolget("printing")
             printlog("parse_printing_capabilities() server printing support=%s", server_printing)
             if server_printing:
-                self.printer_attributes = self.server_capabilities.strlistget("printer.attributes",
-                                                                              ["printer-info", "device-uri"])
-                self.timeout_add(1000, self.init_printing)
+                self.printer_attributes = caps.strtupleget("printer.attributes",
+                                                        ("printer-info", "device-uri"))
+                self.timeout_add(INIT_PRINTING_DELAY*1000, self.init_printing)
 
 
     def init_printing(self):
         try:
-            from xpra.platform.printing import init_printing
+            from xpra.platform.printing import init_printing    # pylint: disable=import-outside-toplevel
             printlog("init_printing=%s", init_printing)
             init_printing(self.send_printers)
         except Exception as e:
             printlog.error("Error initializing printing support:")
-            printlog.error(" %s", e)
+            printlog.estr(e)
             self.printing = False
         else:
             self.send_printers()
@@ -83,10 +87,10 @@ class FilePrintMixin(StubClientMixin, FileTransferHandler):
             return
         self.cancel_send_printers_timer()
         try:
-            from xpra.platform.printing import cleanup_printing
+            from xpra.platform.printing import cleanup_printing  # pylint: disable=import-outside-toplevel
             printlog("cleanup_printing=%s", cleanup_printing)
             cleanup_printing()
-        except ImportError as e:
+        except ImportError:
             printlog("cleanup_printing()", exc_info=True)
         except Exception as e:
             printlog("cleanup_printing()", exc_info=True)
@@ -113,17 +117,16 @@ class FilePrintMixin(StubClientMixin, FileTransferHandler):
         start_thread(self.send_printers_thread, "send-printers", True)
 
     def send_printers_thread(self):
+        from xpra.platform.printing import get_printers, get_mimetypes  # pylint: disable=import-outside-toplevel
         try:
-            self.send_printers_timer = None
-            from xpra.platform.printing import get_printers, get_mimetypes
-            try:
-                printers = get_printers()
-            except Exception as  e:
-                printlog("%s", get_printers, exc_info=True)
-                printlog.error("Error: cannot access the list of printers")
-                printlog.error(" %s", e)
-                return
-            printlog("do_send_printers() found printers=%s", printers)
+            printers = get_printers()
+        except Exception as  e:
+            printlog("%s", get_printers, exc_info=True)
+            printlog.error("Error: cannot access the list of printers")
+            printlog.estr(e)
+            return
+        printlog("send_printers_thread() found printers=%s", printers)
+        try:
             #remove xpra-forwarded printers to avoid loops and multi-forwards,
             #also ignore stopped printers
             #and only keep the attributes that the server cares about (self.printer_attributes)
@@ -137,7 +140,7 @@ class FilePrintMixin(StubClientMixin, FileTransferHandler):
                 device_uri = v.get("device-uri", "")
                 if device_uri:
                     #this is cups specific.. oh well
-                    printlog("do_send_printers() device-uri(%s)=%s", k, device_uri)
+                    printlog("send_printers_thread() device-uri(%s)=%s", k, device_uri)
                     if device_uri.startswith("xpraforwarder"):
                         printlog("do_send_printers() skipping xpra forwarded printer=%s", k)
                         continue
@@ -151,27 +154,29 @@ class FilePrintMixin(StubClientMixin, FileTransferHandler):
                 attrs = used_attrs(v)
                 #add mimetypes:
                 attrs["mimetypes"] = get_mimetypes()
-                exported_printers[k.encode("utf8")] = attrs
+                exported_printers[k] = attrs
             if self.exported_printers is None:
                 #not been sent yet, ensure we can use the dict below:
                 self.exported_printers = {}
             elif exported_printers==self.exported_printers:
-                printlog("do_send_printers() exported printers unchanged: %s", self.exported_printers)
+                printlog("send_printers_thread() exported printers unchanged: %s", self.exported_printers)
                 return
             #show summary of what has changed:
             added = tuple(k for k in exported_printers if k not in self.exported_printers)
             if added:
-                printlog("do_send_printers() new printers: %s", added)
+                printlog("send_printers_thread() new printers: %s", added)
             removed = tuple(k for k in self.exported_printers if k not in exported_printers)
             if removed:
-                printlog("do_send_printers() printers removed: %s", removed)
+                printlog("send_printers_thread() printers removed: %s", removed)
             modified = tuple(k for k,v in exported_printers.items() if
                         self.exported_printers.get(k)!=v and k not in added)
             if modified:
-                printlog("do_send_printers() printers modified: %s", modified)
-            printlog("do_send_printers() printers=%s", exported_printers.keys())
-            printlog("do_send_printers() exported printers=%s", csv(str(x) for x in exported_printers))
+                printlog("send_printers_thread() printers modified: %s", modified)
+            printlog("send_printers_thread() printers=%s", exported_printers.keys())
+            printlog("send_printers_thread() exported printers=%s", csv(str(x) for x in exported_printers))
             self.exported_printers = exported_printers
             self.send("printers", self.exported_printers)
         except Exception:
-            printlog.error("do_send_printers()", exc_info=True)
+            printlog("do_send_printers()", exc_info=True)
+            printlog.error("Error sending the list of printers")
+            printlog.estr(e)

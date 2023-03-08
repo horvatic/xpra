@@ -267,35 +267,41 @@ class Encodings(StubClientMixin):
             assert self.server_auto_video_encoding
             self.encoding = ""
         else:
-            assert encoding in self.get_encodings(), "encoding %s is not supported!" % encoding
+            encodings = self.get_encodings()
+            if encoding not in encodings:
+                raise ValueError(f"encoding {encoding} is not supported - only {csv(encodings)!r}")
             if encoding not in self.server_encodings:
-                log.error("Error: encoding %s is not supported by the server", encoding)
+                log.error(f"Error: encoding {encoding} is not supported by the server")
                 log.error(" the only encodings allowed are:")
-                log.error(" %s", csv(self.server_encodings))
+                log.error(f" "+csv(self.server_encodings))
                 return
-        self.encoding = encoding
+            self.encoding = encoding
         self.send("encoding", self.encoding)
 
     def send_quality(self):
         q = self.quality
         log("send_quality() quality=%s", q)
-        assert q==-1 or 0<=q<=100, "invalid quality: %s" % q
+        if q!=-1 and (q<0 or q>100):
+            raise ValueError(f"invalid quality: {q}")
         self.send("quality", q)
 
     def send_min_quality(self):
         q = self.min_quality
         log("send_min_quality() min-quality=%s", q)
-        assert q==-1 or 0<=q<=100, "invalid min-quality: %s" % q
+        if q!=-1 and (q<0 or q>100):
+            raise ValueError(f"invalid min-quality: {q}")
         self.send("min-quality", q)
 
     def send_speed(self):
         s = self.speed
         log("send_speed() min-speed=%s", s)
-        assert s==-1 or 0<=s<=100, "invalid speed: %s" % s
+        if s!=-1 and (s<0 or s>100):
+            raise ValueError(f"invalid speed: {s}")
         self.send("speed", s)
 
     def send_min_speed(self):
         s = self.min_speed
         log("send_min_speed() min-speed=%s", s)
-        assert s==-1 or 0<=s<=100, "invalid min-speed: %s" % s
+        if s!=-1 and (s<0 or s>100):
+            raise ValueError(f"invalid min-speed: {s}")
         self.send("min-speed", s)

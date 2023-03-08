@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # This file is part of Xpra.
 # Copyright (C) 2017,2018 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
@@ -13,6 +13,7 @@ DEFAULT_BOX_COLORS = {
     "rgb32"     : "red",
     "webp"      : "pink",
     "jpeg"      : "purple",
+    "jpega"     : "plum",
     "png/P"     : "indigo",
     "png/L"     : "teal",
     "h265"      : "khaki",
@@ -21,14 +22,16 @@ DEFAULT_BOX_COLORS = {
     "scroll"    : "brown",
     "mpeg1"     : "olive",
     "mpeg2"     : "lime",
+    "avif"      : "cyan",
     }
 
-ALPHA = 0.3
+ALPHA = 0.6
 #converted from gtk lookups:
 BOX_COLORS = {
     "h264"      : (0.0,                 0.0,                    0.9999847412109375, ALPHA),
     "h265"      : (0.941162109375,      0.901947021484375,      0.54901123046875,   ALPHA),
     "jpeg"      : (0.501953125,         0.0,                    0.501953125,        ALPHA),
+    "jpega"     : (0.8666666666666667,  0.6274509803921569,     0.8666666666666667, ALPHA),
     "mpeg4"     : (0.0,                 0.0,                    0.0,                ALPHA),
     "png"       : (0.9999847412109375,  0.9999847412109375,     0.0,                ALPHA),
     "png/L"     : (0.0,                 0.501953125,            0.501953125,        ALPHA),
@@ -41,6 +44,7 @@ BOX_COLORS = {
     "vp9"       : (0.901947021484375,   0.901947021484375,      0.980377197265625,  ALPHA),
     "mpeg1"     : (0.41796875,          0.5546875,              0.13671875,         ALPHA),
     "mpeg2"     : (0.75,                1.0,                    0,                  ALPHA),
+    "cyan"      : (0,                   1.0,                    1.0,                ALPHA),
 }
 
 BLACK = 0, 0, 0, 0

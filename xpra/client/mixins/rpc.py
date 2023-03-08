@@ -1,11 +1,12 @@
 # This file is part of Xpra.
-# Copyright (C) 2010-2019 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2010-2021 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 #pylint: disable-msg=E1101
 
+from time import monotonic
 from xpra.util import envint, AtomicInteger
-from xpra.os_util import monotonic_time
+from xpra.util import typedict
 from xpra.client.mixins.stub_client_mixin import StubClientMixin
 from xpra.log import Logger
 
@@ -14,13 +15,13 @@ log = Logger("client", "rpc")
 RPC_TIMEOUT = envint("XPRA_RPC_TIMEOUT", 5000)
 
 
-"""
-Utility superclass for client classes that handle RPC calls
-"""
 class RPCClient(StubClientMixin):
+    """
+    Utility mixin for client classes that handle RPC calls
+    """
 
     def __init__(self):
-        StubClientMixin.__init__(self)
+        super().__init__()
         #rpc / dbus:
         self.rpc_counter = AtomicInteger()
         self.rpc_pending_requests = {}
@@ -35,23 +36,15 @@ class RPCClient(StubClientMixin):
             self.source_remove(t)
 
 
-    def run(self):
-        pass
-
-
-    def parse_server_capabilities(self):
-        c = self.server_capabilities
+    def parse_server_capabilities(self, c : typedict) -> bool:
         self.server_dbus_proxy = c.boolget("dbus_proxy")
         #default for pre-0.16 servers:
         if self.server_dbus_proxy:
             default_rpc_types = ["dbus"]
         else:
             default_rpc_types = []
-        self.server_rpc_types = c.strlistget("rpc-types", default_rpc_types)
+        self.server_rpc_types = c.strtupleget("rpc-types", default_rpc_types)
         return True
-
-    def process_ui_capabilities(self):
-        pass
 
 
     def rpc_call(self, rpc_type, rpc_args, reply_handler=None, error_handler=None):
@@ -59,7 +52,7 @@ class RPCClient(StubClientMixin):
         rpcid = self.rpc_counter.increase()
         self.rpc_filter_pending(rpcid)
         #keep track of this request (for timeout / error and reply callbacks):
-        req = monotonic_time(), rpc_type, rpc_args, reply_handler, error_handler
+        req = monotonic(), rpc_type, rpc_args, reply_handler, error_handler
         self.rpc_pending_requests[rpcid] = req
         log("sending %s rpc request %s to server: %s", rpc_type, rpcid, req)
         packet = ["rpc", rpc_type, rpcid] + rpc_args
@@ -73,16 +66,17 @@ class RPCClient(StubClientMixin):
             v = self.rpc_pending_requests.get(k)
             if v is None:
                 continue
-            t, rpc_type, _rpc_args, _reply_handler, ecb = v
-            if 1000*(monotonic_time()-t)>=RPC_TIMEOUT:
-                log.warn("%s rpc request: %s has timed out", rpc_type, _rpc_args)
+            t, rpc_type, rpc_args, reply_handler, ecb = v
+            if 1000*(monotonic()-t)>=RPC_TIMEOUT:
+                log.warn("Warning: %s rpc request: %s has timed out", rpc_type, reply_handler)
+                log.warn(" args: %s", rpc_args)
                 try:
                     del self.rpc_pending_requests[k]
                     if ecb is not None:
                         ecb("timeout")
                 except Exception as e:
                     log.error("Error during timeout handler for %s rpc callback:", rpc_type)
-                    log.error(" %s", e)
+                    log.estr(e)
                     del e
 
 
@@ -109,7 +103,7 @@ class RPCClient(StubClientMixin):
             rh(*args)
         except Exception as e:
             log.error("Error processing rpc reply handler %s(%s) :", rh, args)
-            log.error(" %s", e)
+            log.estr(e)
 
 
     def init_authenticated_packet_handlers(self):

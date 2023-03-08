@@ -1,5 +1,5 @@
 # This file is part of Xpra.
-# Copyright (C) 2010-2019 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2010-2022 Antoine Martin <antoine@xpra.org>
 # Copyright (C) 2008, 2010 Nathaniel Smith <njs@pobox.com>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
@@ -7,33 +7,35 @@
 from xpra.client.mixins.stub_client_mixin import StubClientMixin
 from xpra.platform.features import CLIPBOARD_WANT_TARGETS, CLIPBOARD_GREEDY, CLIPBOARD_PREFERRED_TARGETS, CLIPBOARDS
 from xpra.platform.gui import get_clipboard_native_class
+from xpra.net import compression
 from xpra.scripts.config import FALSE_OPTIONS, TRUE_OPTIONS
-from xpra.util import flatten_dict
-from xpra.os_util import bytestostr
+from xpra.util import flatten_dict, typedict
+from xpra.os_util import bytestostr, is_Wayland
 from xpra.log import Logger
 
 log = Logger("clipboard")
 
 
-"""
-Utility superclass for clients that handle clipboard synchronization
-"""
 class ClipboardClient(StubClientMixin):
+    """
+    Utility mixin for clients that handle clipboard synchronization
+    """
     __signals__ = ["clipboard-toggled"]
 
     def __init__(self):
-        StubClientMixin.__init__(self)
+        super().__init__()
         self.client_clipboard_type = ""
         self.client_clipboard_direction = "both"
         self.client_supports_clipboard = False
         self.clipboard_enabled = False
         self.server_clipboard_direction = "both"
         self.server_clipboard = False
-        self.server_clipboard_loop_uuids = {}
         self.server_clipboard_direction = ""
-        self.server_clipboard_enable_selections = False
-        self.server_clipboard_preferred_targets = False
-        self.server_clipboards = []
+        self.server_clipboard_preferred_targets = ()
+        self.server_clipboards = ()
+        self.server_clipboard_greedy = False
+        self.server_clipboard_want_targets = False
+        self.server_clipboard_selections = ()
         self.clipboard_helper = None
         self.local_clipboard_requests = 0
         self.remote_clipboard_requests = 0
@@ -41,7 +43,7 @@ class ClipboardClient(StubClientMixin):
         self.local_clipboard = ""
         self.remote_clipboard = ""
 
-    def init(self, opts, _extra_args=()):
+    def init(self, opts):
         self.client_clipboard_type = opts.clipboard
         self.client_clipboard_direction = opts.clipboard_direction
         self.client_supports_clipboard = (opts.clipboard or "").lower() not in FALSE_OPTIONS
@@ -60,26 +62,49 @@ class ClipboardClient(StubClientMixin):
                 log.error("error on clipboard helper '%s' cleanup", ch, exc_info=True)
 
 
-    def get_caps(self):
+    def get_info(self) -> dict:
+        return {
+            "clipboard": {
+                "client" : {
+                    "enabled"   : self.clipboard_enabled,
+                    "type"      : self.client_clipboard_type,
+                    "direction" : self.client_clipboard_direction,
+                },
+                "server" : {
+                    "enabled"   : self.server_clipboard,
+                    "direction" : self.server_clipboard_direction,
+                    "selections": self.server_clipboards,
+                },
+                "requests" : {
+                    "local"     : self.local_clipboard_requests,
+                    "remote"    : self.remote_clipboard_requests,
+                    },
+                },
+            }
+
+    def get_caps(self) -> dict:
         if not self.client_supports_clipboard:
             return {}
-        caps = flatten_dict({
-            "clipboard" : {
-                ""                          : True,
-                "notifications"             : True,
-                "selections"                : CLIPBOARDS,
-                #buggy osx clipboards:
-                "want_targets"              : CLIPBOARD_WANT_TARGETS,
-                #buggy osx and win32 clipboards:
-                "greedy"                    : CLIPBOARD_GREEDY,
-                "preferred-targets"         : CLIPBOARD_PREFERRED_TARGETS,
-                "set_enabled"               : True,
-                "contents-slice-fix"        : True,
-                },
-             })
+        ccaps = {
+            ""                          : True,
+            "enabled"                   : True,
+            "notifications"             : True,
+            "selections"                : CLIPBOARDS,
+            #buggy osx clipboards:
+            "want_targets"              : CLIPBOARD_WANT_TARGETS,
+            #buggy osx and win32 clipboards:
+            "greedy"                    : CLIPBOARD_GREEDY,
+            "preferred-targets"         : CLIPBOARD_PREFERRED_TARGETS,
+            "set_enabled"               : True,     #v4 servers no longer use or show this flag
+            "contents-slice-fix"        : True,     #fixed in v2.4, removed check in v4.3
+            }
+        #legacy flat format:
+        caps = flatten_dict({"clipboard" : ccaps})
+        #v4.4 uses namespace:
+        caps["clipboard"] = ccaps
         return caps
 
-    def parse_server_capabilities(self):
+    def parse_server_capabilities(self, c : typedict) -> bool:
         try:
             from xpra import clipboard
             assert clipboard
@@ -87,9 +112,7 @@ class ClipboardClient(StubClientMixin):
             log.warn("Warning: clipboard module is missing")
             self.clipboard_enabled = False
             return True
-        c = self.server_capabilities
         self.server_clipboard = c.boolget("clipboard")
-        self.server_clipboard_loop_uuids = c.dictget("clipboard.loop-uuids", {})
         self.server_clipboard_direction = c.strget("clipboard-direction", "both")
         if self.server_clipboard_direction!=self.client_clipboard_direction and self.server_clipboard_direction!="both":
             if self.client_clipboard_direction=="disabled":
@@ -104,36 +127,41 @@ class ClipboardClient(StubClientMixin):
                 log.warn("Warning: incompatible clipboard direction settings")
                 log.warn(" server setting: %s, client setting: %s",
                          self.server_clipboard_direction, self.client_clipboard_direction)
-        self.server_clipboard_enable_selections = c.boolget("clipboard.enable-selections")
         try:
             from xpra.clipboard.clipboard_core import ALL_CLIPBOARDS
         except ImportError:
             ALL_CLIPBOARDS = []
-        self.server_clipboards = c.strlistget("clipboards", ALL_CLIPBOARDS)
-        log("server clipboard: supported=%s, direction=%s, supports enable selection=%s",
-                     self.server_clipboard, self.server_clipboard_direction, self.server_clipboard_enable_selections)
+        self.server_clipboards = c.strtupleget("clipboards", ALL_CLIPBOARDS)
+        log("server clipboard: supported=%s, direction=%s",
+                     self.server_clipboard, self.server_clipboard_direction)
         log("client clipboard: supported=%s, direction=%s",
                      self.client_supports_clipboard, self.client_clipboard_direction)
         self.clipboard_enabled = self.client_supports_clipboard and self.server_clipboard
+        self.server_clipboard_greedy = c.boolget("clipboard.greedy")
+        self.server_clipboard_want_targets = c.boolget("clipboard.want_targets")
+        self.server_clipboard_selections = c.strtupleget("clipboard.selections", CLIPBOARDS)
+        self.server_clipboard_preferred_targets = c.strtupleget("clipboard.preferred-targets", ())
+        log("server clipboard: greedy=%s, want_targets=%s, selections=%s",
+            self.server_clipboard_greedy, self.server_clipboard_want_targets, self.server_clipboard_selections)
         log("parse_clipboard_caps() clipboard enabled=%s", self.clipboard_enabled)
-        self.server_clipboard_preferred_targets = c.strlistget("clipboard.preferred-targets", ())
+        self.server_clipboard_preferred_targets = c.strtupleget("clipboard.preferred-targets", ())
         return True
 
-    def process_ui_capabilities(self):
+    def process_ui_capabilities(self, caps : typedict):
         log("process_ui_capabilities() clipboard_enabled=%s", self.clipboard_enabled)
         if self.clipboard_enabled:
             ch = self.make_clipboard_helper()
             if not ch:
                 log.warn("Warning: no clipboard support")
-                return
+                if is_Wayland():
+                    log.warn(" (wayland display)")
             self.clipboard_helper = ch
             self.clipboard_enabled = ch is not None
             log("clipboard helper=%s", ch)
             if self.clipboard_enabled:
-                if self.server_clipboard_enable_selections:
-                    #tell the server about which selections we really want to sync with
-                    #(could have been translated, or limited if the client only has one, etc)
-                    self.send_clipboard_selections(ch.remote_clipboards)
+                #tell the server about which selections we really want to sync with
+                #(could have been translated, or limited if the client only has one, etc)
+                self.send_clipboard_selections(ch.get_remote_selections())
                 ch.send_all_tokens()
         #ui may want to know this is now set:
         self.emit("clipboard-toggled")
@@ -198,7 +226,7 @@ class ClipboardClient(StubClientMixin):
                 return self.setup_clipboard_helper(helperclass)
             except ImportError as e:
                 log.error("Error: cannot instantiate %s:", helperclass)
-                log.error(" %s", e)
+                log.estr(e)
                 del e
             except Exception:
                 log.error("Error: cannot instantiate %s", helperclass, exc_info=True)
@@ -227,23 +255,12 @@ class ClipboardClient(StubClientMixin):
             if self.clipboard_enabled:
                 ch = self.clipboard_helper
                 assert ch is not None
-                self.send_clipboard_selections(ch.remote_clipboards)
+                self.send_clipboard_selections(ch.get_remote_selections())
                 ch.send_all_tokens()
-            else:
-                pass    #FIXME: todo!
 
     def send_clipboard_selections(self, selections):
-        log("send_clipboard_selections(%s) server_clipboard_enable_selections=%s",
-            selections, self.server_clipboard_enable_selections)
-        if self.server_clipboard_enable_selections:
-            self.send_now("clipboard-enable-selections", selections)
-
-    def send_clipboard_loop_uuids(self):
-        uuids = self.clipboard_helper.get_loop_uuids()
-        log("send_clipboard_loop_uuid() uuids=%s", uuids)
-        if self.server_clipboard_loop_uuids:
-            self.send_now("clipboard-loop-uuids", uuids)
-
+        log("send_clipboard_selections(%s)", selections)
+        self.send_now("clipboard-enable-selections", selections)
 
     def setup_clipboard_helper(self, helperClass):
         log("setup_clipboard_helper(%s)", helperClass)
@@ -255,40 +272,25 @@ class ClipboardClient(StubClientMixin):
                  "clipboards.remote"    : self.server_clipboards,
                  "can-send"             : self.client_clipboard_direction in ("to-server", "both"),
                  "can-receive"          : self.client_clipboard_direction in ("to-client", "both"),
-                 "remote-loop-uuids"    : self.server_clipboard_loop_uuids,
-                 }
-        #only allow translation overrides if we have a way of telling the server about them:
-        if self.server_clipboard_enable_selections:
-            kwargs.update({
-                #the local clipboard we want to sync to (with the translated clipboard only):
+                 #the local clipboard we want to sync to (with the translated clipboard only):
                  "clipboard.local"      : self.local_clipboard,
                  #the remote clipboard we want to we sync to (with the translated clipboard only):
                  "clipboard.remote"     : self.remote_clipboard
-                 })
+                 }
         log("setup_clipboard_helper() kwargs=%s", kwargs)
         def clipboard_send(*parts):
             log("clipboard_send: %s", parts[0])
             if not self.clipboard_enabled:
                 log("clipboard is disabled, not sending clipboard packet")
                 return
-            #handle clipboard compression if needed:
-            from xpra.net.compression import Compressible
+            #replaces 'Compressible' items in a packet
+            #with a subclass that calls self.compressed_wrapper
+            #and which can therefore enable the brotli compressor:
             packet = list(parts)
-            for v in packet:
-                if isinstance(v, Compressible):
-                    register_clipboard_compress_cb(v)
+            for i, v in enumerate(packet):
+                if isinstance(v, compression.Compressible):
+                    packet[i] = self.compressible_item(v)
             self.send_now(*packet)
-        def register_clipboard_compress_cb(compressible):
-            #register the compressor which will fire in protocol.encode:
-            def compress_clipboard():
-                log("compress_clipboard() compressing %s, server compressors=%s",
-                                  compressible, self.server_compressors)
-                from xpra.net import compression
-                if "brotli" in self.server_compressors and compression.use_brotli:
-                    return compression.compressed_wrapper(compressible.datatype, compressible.data,
-                                                        level=9, brotli=True, can_inline=False)
-                return self.compressed_wrapper(compressible.datatype, compressible.data)
-            compressible.compress = compress_clipboard
         def clipboard_progress(local_requests, remote_requests):
             log("clipboard_progress(%s, %s)", local_requests, remote_requests)
             if local_requests is not None:
@@ -299,7 +301,24 @@ class ClipboardClient(StubClientMixin):
             self.clipboard_notify(n)
         hc = helperClass(clipboard_send, clipboard_progress, **kwargs)
         hc.set_preferred_targets(self.server_clipboard_preferred_targets)
+        hc.set_greedy_client(self.server_clipboard_greedy)
+        hc.set_want_targets_client(self.server_clipboard_want_targets)
+        hc.enable_selections(self.server_clipboard_selections)
         return hc
+
+    def compressible_item(self, compressible):
+        """
+            converts a 'Compressible' item into something that will
+            call `self.compressed_wrapper` when compression is requested
+            by the network encode thread.
+        """
+        client = self
+        class ProtocolCompressible(compression.Compressible):
+            __slots__ = ()
+            def compress(self):
+                return client.compressed_wrapper(self.datatype, self.data,
+                                                 level=9, can_inline=False, brotli=True)
+        return ProtocolCompressible(compressible.datatype, compressible.data)
 
     def clipboard_notify(self, n):
         log("clipboard_notify(%i)", n)

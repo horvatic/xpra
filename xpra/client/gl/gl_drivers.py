@@ -1,14 +1,16 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # This file is part of Xpra.
 # Copyright (C) 2012 Serviware (Arthur Huillet, <ahuillet@serviware.com>)
-# Copyright (C) 2012-2017 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2012-2023 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
 #These chipsets will use OpenGL,
 #there will not be any warnings, even if the vendor is greylisted:
 WHITELIST = {
-    "renderer"  : ["Haswell", "Skylake", "Kabylake", "Cannonlake"],
+    "renderer"  : ["Haswell", "Skylake", "Kabylake", "Cannonlake",
+                   "Whiskeylake", "Amberlake", "Cascadelake", "Cometlake",
+                   "Icelake", "Cooperlake"],
     }
 
 #Chipsets from these vendors will trigger warnings,
@@ -28,17 +30,26 @@ BLACKLIST = {
         [
             "SVGA3D",
             "Software Rasterizer",
-            "Mesa DRI Intel(R) Ivybridge Desktop",
-            "Mesa DRI Intel(R) Haswell Mobile",
-            "Intel(R) UHD Graphics 620",
         ],
     "vendor"    : [
         #"VMware, Inc.",
         #"Humper",
         #to disable nvidia, uncomment this:
         #"NVIDIA Corporation",
-        ]
+        ],
+    "platform"  : [
+        #"darwin",
+        ],
     }
+
+
+#for testing:
+#GREYLIST["vendor"].append("NVIDIA Corporation")
+#WHITELIST["renderer"] = ["GeForce GTX 760/PCIe/SSE2"]
+#frequent crashes on OSX with GT 650M: (see ticket #808)
+#if OSX:
+#    GREYLIST.setdefault("vendor", []).append("NVIDIA Corporation")
+
 
 class OpenGLFatalError(ImportError):
     pass

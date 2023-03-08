@@ -3,24 +3,25 @@
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
+from gi.repository import GLib, Gtk
+
 from xpra.util import envbool, csv
 from xpra.gtk_common.gtk_util import scaled_image
 from xpra.gtk_common.about import about
+from xpra.client.gtk_base.gtk_tray_menu_base import (
+    GTKTrayMenuBase,
+    CLIPBOARD_LABEL_TO_NAME, CLIPBOARD_NAME_TO_LABEL, CLIPBOARD_LABELS,
+    CLIPBOARD_DIRECTION_LABELS, CLIPBOARD_DIRECTION_NAME_TO_LABEL,
+    SHOW_UPLOAD, SHOW_VERSION_CHECK, RUNCOMMAND_MENU, SHOW_SERVER_COMMANDS, SHOW_SHUTDOWN,
+    SHOW_QR,
+    )
 from xpra.platform.paths import get_icon
 from xpra.platform.darwin.gui import get_OSXApplication
 from xpra.client import mixin_features
-from xpra.client.gtk_base.gtk_tray_menu_base import (
-    GTKTrayMenuBase,
-)
 from xpra.log import Logger
 
 log = Logger("osx", "tray", "menu")
 clipboardlog = Logger("osx", "menu", "clipboard")
-
-import gi
-from gi.repository import GLib as glib                  #@UnresolvedImport
-from gi.repository import Gtk as gtk
-
 
 #control which menus are shown in the OSX global menu:
 SHOW_FEATURES_MENU = True
@@ -30,20 +31,12 @@ SHOW_ACTIONS_MENU = True
 SHOW_INFO_MENU = True
 SHOW_CLIPBOARD_MENU = True
 SHOW_SERVER_MENU = True
-SHOW_VERSION_CHECK = False
-SHOW_SERVER_COMMANDS = False
-SHOW_UPLOAD = False
-SHOW_SHUTDOWN = False
-RUNCOMMAND_MENU = False
 
 SHOW_ABOUT_XPRA = True
 
 SINGLE_MENU = envbool("XPRA_OSX_SINGLE_MENU", False)
 USE_WINDOW_MENU = envbool("XPRA_OSX_USE_WINDOW_MENU", True)
 
-
-CLIPBOARD_LABELS = []
-CLIPBOARD_DIRECTION_LABELS = []
 
 SEPARATOR = "SEPARATOR"
 
@@ -67,7 +60,7 @@ class OSXMenuHelper(GTKTrayMenuBase):
     """
 
     def __init__(self, client=None):
-        GTKTrayMenuBase.__init__(self, client)
+        super().__init__(client)
         log("OSXMenuHelper(%s)", client)
         self.menu_bar = None
         self.hidden_window = None
@@ -92,7 +85,7 @@ class OSXMenuHelper(GTKTrayMenuBase):
     def build(self):
         log("OSXMenuHelper.build()")
         if self.menu_bar is None:
-            self.menu_bar = gtk.MenuBar()
+            self.menu_bar = Gtk.MenuBar()
             self.menu_bar.show_all()
         return self.menu_bar
 
@@ -134,7 +127,7 @@ class OSXMenuHelper(GTKTrayMenuBase):
             item.show_all()
         else:
             if label.startswith(SEPARATOR):
-                item = gtk.SeparatorMenuItem()
+                item = Gtk.SeparatorMenuItem()
             else:
                 item = self.menuitem(label)
                 item.set_submenu(submenu)
@@ -190,38 +183,43 @@ class OSXMenuHelper(GTKTrayMenuBase):
 
     def get_extra_menus(self):
         menus = []
+        def add(menu, item):
+            if item:
+                menu.add(item)
         if SHOW_INFO_MENU:
             info_menu = self.make_menu()
-            info_menu.append(self.make_sessioninfomenuitem())
-            if SHOW_VERSION_CHECK:
-                info_menu.append(self.make_updatecheckmenuitem())
-            info_menu.append(self.make_bugreportmenuitem())
             menus.append(("Info", info_menu))
+            add(info_menu, self.make_sessioninfomenuitem())
+            if SHOW_QR:
+                add(info_menu, self.make_qrmenuitem())
+            if SHOW_VERSION_CHECK:
+                add(info_menu, self.make_updatecheckmenuitem())
+            add(info_menu, self.make_bugreportmenuitem())
         if SHOW_FEATURES_MENU:
             features_menu = self.make_menu()
             menus.append(("Features", features_menu))
             self.append_featuresmenuitems(features_menu)
             if mixin_features.windows:
-                features_menu.add(self.make_swapkeysmenuitem())
-                features_menu.add(self.make_invertmousewheelmenuitem())
-                features_menu.add(self.make_numlockmenuitem())
-                features_menu.add(self.make_scalingmenuitem())
+                add(features_menu, self.make_swapkeysmenuitem())
+                add(features_menu, self.make_invertmousewheelmenuitem())
+                add(features_menu, self.make_numlockmenuitem())
+                add(features_menu, self.make_scalingmenuitem())
         if mixin_features.clipboard and SHOW_CLIPBOARD_MENU:
             clipboard_menu = self.make_menu()
             menus.append(("Clipboard", clipboard_menu))
             for label in CLIPBOARD_LABELS:
-                clipboard_menu.add(self.make_clipboard_submenuitem(label, self._remote_clipboard_changed))
-            clipboard_menu.add(gtk.SeparatorMenuItem())
+                add(clipboard_menu, self.make_clipboard_submenuitem(label, self._remote_clipboard_changed))
+            add(clipboard_menu, Gtk.SeparatorMenuItem())
             for label in CLIPBOARD_DIRECTION_LABELS:
-                clipboard_menu.add(self.make_clipboard_submenuitem(label, self._clipboard_direction_changed))
+                add(clipboard_menu, self.make_clipboard_submenuitem(label, self._clipboard_direction_changed))
             clipboard_menu.show_all()
             self.client.after_handshake(self.set_clipboard_menu, clipboard_menu)
         if mixin_features.audio and SHOW_SOUND_MENU:
             sound_menu = self.make_menu()
             if self.client.speaker_allowed and self.client.speaker_codecs:
-                sound_menu.add(self.make_speakermenuitem())
+                add(sound_menu, self.make_speakermenuitem())
             if self.client.microphone_allowed and self.client.microphone_codecs:
-                sound_menu.add(self.make_microphonemenuitem())
+                add(sound_menu, self.make_microphonemenuitem())
             menus.append(("Sound", sound_menu))
         if mixin_features.windows and SHOW_ENCODINGS_MENU:
             encodings_menu = self.make_menu()
@@ -237,25 +235,25 @@ class OSXMenuHelper(GTKTrayMenuBase):
             menus.append(("Encoding", encodings_menu))
         if mixin_features.windows and SHOW_ACTIONS_MENU:
             actions_menu = self.make_menu()
-            actions_menu.add(self.make_raisewindowsmenuitem())
-            actions_menu.add(self.make_minimizewindowsmenuitem())
-            actions_menu.add(self.make_refreshmenuitem())
-            actions_menu.add(self.make_reinitmenuitem())
+            add(actions_menu, self.make_raisewindowsmenuitem())
+            add(actions_menu, self.make_minimizewindowsmenuitem())
+            add(actions_menu, self.make_refreshmenuitem())
+            add(actions_menu, self.make_reinitmenuitem())
             self.window_menu = actions_menu
             menus.append(("Windows", actions_menu))
         if RUNCOMMAND_MENU or SHOW_SERVER_COMMANDS or SHOW_UPLOAD or SHOW_SHUTDOWN:
             server_menu = self.make_menu()
             if SHOW_SHUTDOWN:
-                server_menu.append(self.make_shutdownmenuitem())
+                add(server_menu, self.make_shutdownmenuitem())
             #set_sensitive(bool) does not work on OSX,
             #so we only add the menu item if it does something
             def add_ah(*_args):
                 if self.client.server_start_new_commands:
-                    server_menu.add(self.make_runcommandmenuitem())
+                    add(server_menu, self.make_runcommandmenuitem())
                 if SHOW_SERVER_COMMANDS and self.client.server_commands_info:
-                    server_menu.append(self.make_servercommandsmenuitem())
+                    add(server_menu, self.make_servercommandsmenuitem())
                 if SHOW_UPLOAD and self.client.remote_file_transfer:
-                    server_menu.add(self.make_uploadmenuitem())
+                    add(server_menu, self.make_uploadmenuitem())
             self.client.after_handshake(add_ah)
             menus.append(("Server", server_menu))
         menus.append((SEPARATOR+"-EXTRAS", None))
@@ -277,7 +275,7 @@ class OSXMenuHelper(GTKTrayMenuBase):
             return
         remote_clipboard = CLIPBOARD_LABEL_TO_NAME[label]
         clipboardlog("will select clipboard menu item with label=%s, for remote_clipboard=%s", label, remote_clipboard)
-        glib.timeout_add(0, self._do_clipboard_change, remote_clipboard)
+        GLib.timeout_add(0, self._do_clipboard_change, remote_clipboard)
 
     def _do_clipboard_change(self, remote_clipboard):
         #why do we look it up again when we could just pass it in
@@ -349,9 +347,9 @@ class OSXMenuHelper(GTKTrayMenuBase):
     #these methods are called by the superclass
     #but we don't have a quality or speed menu, so override and ignore
     def set_qualitymenu(self, *args):
-        pass
+        pass    #no quality menu on MacOS
     def set_speedmenu(self, *args):
-        pass
+        pass    #no speed menu on MacOS
 
     def _get_keyboard(self):
         if not self.client or not self.client.keyboard_helper:
@@ -433,7 +431,7 @@ class OSXMenuHelper(GTKTrayMenuBase):
                 return  None
             if size:
                 return scaled_image(pixbuf, size)
-            return gtk.image_new_from_pixbuf(pixbuf)
+            return Gtk.Image.new_from_pixbuf(pixbuf)
         except Exception:
             log.error("get_image(%s, %s)", icon_name, size, exc_info=True)
             return  None

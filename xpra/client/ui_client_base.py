@@ -158,7 +158,7 @@ class UIXpraClient(ClientBaseClass):
         """ initialize variables from configuration """
         for c in CLIENT_BASES:
             log("init: %s", c)
-            c.init(self, opts, extra_args)
+            c.init(self, opts)
 
         self.title = opts.title
         self.session_name = bytestostr(opts.session_name)

@@ -1,12 +1,14 @@
 # This file is part of Xpra.
 # Copyright (C) 2010 Nathaniel Smith <njs@pobox.com>
-# Copyright (C) 2011-2018 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2011-2021 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
 import os
+import gi
+gi.require_version('Gdk', '3.0')
+from gi.repository import Gdk
 
-from xpra.gtk_common.gtk_util import SHIFT_MASK, LOCK_MASK, META_MASK, CONTROL_MASK, SUPER_MASK, HYPER_MASK
 from xpra.platform.keyboard_base import KeyboardBase, log
 from xpra.platform.darwin.osx_menu import getOSXMenuHelper
 
@@ -74,11 +76,8 @@ class Keyboard(KeyboardBase):
         Switch Meta and Control
     """
 
-    def __init__(self):
-        KeyboardBase.__init__(self)
-        self.init_vars()
-
     def init_vars(self):
+        super().init_vars()
         self.swap_keys = True
         self.meta_modifier = None
         self.control_modifier = "control"
@@ -89,9 +88,15 @@ class Keyboard(KeyboardBase):
         self.num_lock_keycode = NUM_LOCK_KEYCODE
         self.key_translations = {}
 
-    def cleanup(self):
-        self.init_vars()
-        KeyboardBase.cleanup(self)
+    def __repr__(self):
+        return "darwin.Keyboard"
+
+
+    def get_all_x11_layouts(self):
+        x11_layouts = {}
+        for name, layout in APPLE_LAYOUTS.items():
+            x11_layouts[layout] = name
+        return x11_layouts
 
 
     def get_layout_spec(self):
@@ -127,7 +132,7 @@ class Keyboard(KeyboardBase):
         except Exception as e:
             log("get_layout_spec()", exc_info=True)
             log.error("Error querying keyboard layout:")
-            log.error(" %s", e)
+            log.estr(e)
         return layout, layouts, variant, variants, options
 
     def get_keymap_modifiers(self):
@@ -138,7 +143,7 @@ class Keyboard(KeyboardBase):
         return  {}, [], ["lock", "control"]
 
     def set_modifier_mappings(self, mappings):
-        KeyboardBase.set_modifier_mappings(self, mappings)
+        super().set_modifier_mappings(mappings)
         self.meta_modifier = self.modifier_keys.get("Meta_L") or self.modifier_keys.get("Meta_R")
         self.control_modifier = self.modifier_keys.get("Control_L") or self.modifier_keys.get("Control_R") or "control"
         self.super_modifier = self.modifier_keys.get("Super_L") or self.modifier_keys.get("Super_R")
@@ -199,12 +204,12 @@ class Keyboard(KeyboardBase):
             meta = self.meta_modifier
             control = self.control_modifier
         modmap = {
-            SHIFT_MASK      : "shift",
-            LOCK_MASK       : "lock",
-            SUPER_MASK      : self.super_modifier,
-            HYPER_MASK      : self.hyper_modifier,
-            META_MASK       : meta,
-            CONTROL_MASK    : control,
+            Gdk.ModifierType.SHIFT_MASK      : "shift",
+            Gdk.ModifierType.LOCK_MASK       : "lock",
+            Gdk.ModifierType.SUPER_MASK      : self.super_modifier,
+            Gdk.ModifierType.HYPER_MASK      : self.hyper_modifier,
+            Gdk.ModifierType.META_MASK       : meta,
+            Gdk.ModifierType.CONTROL_MASK    : control,
             }
         names = []
         for modmask, modname in modmap.items():

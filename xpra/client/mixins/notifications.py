@@ -1,38 +1,39 @@
 # This file is part of Xpra.
-# Copyright (C) 2010-2019 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2010-2021 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 #pylint: disable-msg=E1101
 
 from xpra.platform.paths import get_icon_filename
 from xpra.platform.gui import get_native_notifier_classes
-from xpra.os_util import bytestostr, strtobytes
-from xpra.util import envbool, repr_ellipsized, make_instance, updict
+from xpra.util import envbool, repr_ellipsized, make_instance, updict, typedict, net_utf8
 from xpra.client.mixins.stub_client_mixin import StubClientMixin
 from xpra.log import Logger
 
 log = Logger("notify")
 
 NATIVE_NOTIFIER = envbool("XPRA_NATIVE_NOTIFIER", True)
+THREADED_NOTIFICATIONS = envbool("XPRA_THREADED_NOTIFICATIONS", True)
 
 
-"""
-Utility superclass for clients that handle notifications
-"""
 class NotificationClient(StubClientMixin):
+    """
+    Mixin for clients that handle notifications
+    """
 
     def __init__(self):
-        StubClientMixin.__init__(self)
+        super().__init__()
         self.client_supports_notifications = False
         self.server_notifications = False
         self.server_notifications_close = False
         self.notifications_enabled = False
         self.notifier = None
         self.tray = None
+        self.callbacks = {}
         #override the default handler in client base:
         self.may_notify = self.do_notify
 
-    def init(self, opts, _extra_args=()):
+    def init(self, opts):
         if opts.notifications:
             try:
                 from xpra import notifications
@@ -57,15 +58,14 @@ class NotificationClient(StubClientMixin):
                 log.error("Error on notifier cleanup", exc_info=True)
 
 
-    def parse_server_capabilities(self):
-        c = self.server_capabilities
+    def parse_server_capabilities(self, c : typedict) -> bool:
         self.server_notifications = c.boolget("notifications")
         self.server_notifications_close = c.boolget("notifications.close")
         self.notifications_enabled = self.client_supports_notifications
         return True
 
 
-    def get_caps(self):
+    def get_caps(self) -> dict:
         return updict({}, "notifications", {
             ""            : self.client_supports_notifications,
             "close"       : self.client_supports_notifications,
@@ -85,12 +85,19 @@ class NotificationClient(StubClientMixin):
     def notification_closed(self, nid, reason=3, text=""):
         log("notification_closed(%i, %i, %s) server notification.close=%s",
             nid, reason, text, self.server_notifications_close)
-        if self.server_notifications_close:
+        callback = self.callbacks.pop(nid, None)
+        if callback:
+            callback("notification-close", nid, reason, text)
+        elif self.server_notifications_close:
             self.send("notification-close", nid, reason, text)
 
     def notification_action(self, nid, action_id):
         log("notification_action(%i, %s)", nid, action_id)
-        self.send("notification-action", nid, action_id)
+        callback = self.callbacks.get(nid, None)
+        if callback:
+            callback("notification-action", nid, action_id)
+        else:
+            self.send("notification-action", nid, action_id)
 
     def get_notifier_classes(self):
         #subclasses will generally add their toolkit specific variants
@@ -100,10 +107,13 @@ class NotificationClient(StubClientMixin):
             return []
         return get_native_notifier_classes()
 
-    def do_notify(self, nid, summary, body, actions=(), hints=None, expire_timeout=10*1000, icon_name=None):
+    def do_notify(self, nid, summary, body, actions=(),
+                  hints=None, expire_timeout=10*1000, icon_name=None, callback=None):
         log("do_notify%s client_supports_notifications=%s, notifier=%s",
             (nid, summary, body, actions, hints, expire_timeout, icon_name),
             self.client_supports_notifications, self.notifier)
+        if callback:
+            self.callbacks[nid] = callback
         n = self.notifier
         if not self.client_supports_notifications or not n:
             #just log it instead:
@@ -123,8 +133,11 @@ class NotificationClient(StubClientMixin):
                 log("failed to show notification", exc_info=True)
                 log.error("Error: cannot show notification")
                 log.error(" '%s'", summary)
-                log.error(" %s", e)
-        self.idle_add(show_notification)
+                log.estr(e)
+        if THREADED_NOTIFICATIONS:
+            show_notification()
+        else:
+            self.idle_add(show_notification)
 
     def _process_notify_show(self, packet):
         if not self.notifications_enabled:
@@ -144,15 +157,9 @@ class NotificationClient(StubClientMixin):
         log("notification actions=%s, hints=%s", actions, hints)
         assert self.notifier
         #this one of the few places where we actually do care about character encoding:
-        try:
-            summary = strtobytes(summary).decode("utf8")
-        except UnicodeDecodeError:
-            summary = bytestostr(summary)
-        try:
-            body = strtobytes(body).decode("utf8")
-        except UnicodeDecodeError:
-            body = bytestostr(body)
-        app_name = bytestostr(app_name)
+        summary = net_utf8(summary)
+        body = net_utf8(body)
+        app_name = net_utf8(app_name)
         tray = self.get_tray_window(app_name, hints)
         log("get_tray_window(%s)=%s", app_name, tray)
         self.notifier.show_notify(dbus_id, tray, nid,

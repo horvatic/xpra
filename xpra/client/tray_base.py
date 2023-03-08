@@ -1,19 +1,19 @@
 # This file is part of Xpra.
 # Copyright (C) 2010 Nathaniel Smith <njs@pobox.com>
-# Copyright (C) 2011-2019 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2011-2022 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
+from time import monotonic
 from collections import deque
 
 from xpra.platform.paths import get_icon_filename
 from xpra.log import Logger
-from xpra.os_util import monotonic_time
 
 log = Logger("tray")
 
 
-class TrayBase(object):
+class TrayBase:
     """
         Utility superclass for all tray implementations
     """
@@ -37,7 +37,7 @@ class TrayBase(object):
         self.icon_timestamp = 0
 
     def __repr__(self):
-        return "Tray(%i:%s)" % (self.app_id, self.tooltip)
+        return f"Tray({self.app_id}:{self.tooltip})"
 
     def cleanup(self):
         if self.tray_widget:
@@ -45,13 +45,16 @@ class TrayBase(object):
             self.tray_widget = None
 
     def ready(self):
-        pass
+        """
+        This is called when we have finished the startup sequence.
+        The MacOS dock overrides this method.
+        """
 
     def show(self):
-        raise NotImplementedError("override me!")
+        raise NotImplementedError
 
     def hide(self):
-        raise NotImplementedError("override me!")
+        raise NotImplementedError
 
     def get_screen(self):
         return -1
@@ -60,7 +63,7 @@ class TrayBase(object):
         return None     #assume "HORIZONTAL"
 
     def get_geometry(self):
-        raise NotImplementedError("override me!")
+        raise NotImplementedError
 
     def get_size(self):
         g = self.get_geometry()
@@ -70,38 +73,38 @@ class TrayBase(object):
 
     def set_tooltip(self, tooltip=None):
         self.tooltip = tooltip
-        raise NotImplementedError("override me!")
+        raise NotImplementedError
 
     def set_blinking(self, on):
-        raise NotImplementedError("override me!")
+        raise NotImplementedError
 
 
     def set_icon_from_data(self, pixels, has_alpha, w, h, rowstride, options=None):
-        raise NotImplementedError("override me!")
+        raise NotImplementedError
 
     def get_icon_filename(self, basename=None):
         name = basename or self.default_icon_filename
         f = get_icon_filename(name, self.default_icon_extension)
         if not f:
-            log.error("Error: cannot find icon '%s'", name)
+            log.error(f"Error: cannot find icon {name!r}")
         return f
 
     def set_icon(self, basename=None):
         filename = self.get_icon_filename(basename)
         if not filename:
             return
-        log("set_icon(%s) using filename=%s", basename, filename)
+        log(f"set_icon({basename}) using filename={filename!r}")
         self.set_icon_from_file(filename)
 
     def set_icon_from_file(self, filename):
-        log("set_icon_from_file(%s) tray_widget=%s", filename, self.tray_widget)
+        log(f"set_icon_from_file({filename}) tray_widget={self.tray_widget}")
         if not self.tray_widget:
             return
         self.do_set_icon_from_file(filename)
-        self.icon_timestamp = monotonic_time()
+        self.icon_timestamp = monotonic()
 
     def do_set_icon_from_file(self, filename):
-        raise NotImplementedError("override me!")
+        raise NotImplementedError
 
     def recalculate_geometry(self, x, y, width, height):
         log("recalculate_geometry%s guess=%s, tray event locations: %s",

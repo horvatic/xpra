@@ -1,28 +1,30 @@
 # -*- coding: utf-8 -*-
 # This file is part of Xpra.
-# Copyright (C) 2017-2018 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2017-2022 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
+import os
 import sys
-import os.path
 import socket
 import subprocess
-from collections import OrderedDict
 
-from xpra.platform.paths import get_icon_dir, get_xpra_command, get_nodock_command
+import gi
+gi.require_version("Gtk", "3.0")  # @UndefinedVariable
+gi.require_version("Pango", "1.0")  # @UndefinedVariable
+gi.require_version("GdkPixbuf", "2.0")  # @UndefinedVariable
+from gi.repository import Pango, GLib, Gtk, Gio  # @UnresolvedImport
+
+from xpra.platform.paths import get_xpra_command, get_nodock_command
 from xpra.platform.dotxpra import DotXpra
 from xpra.platform.gui import force_focus
 from xpra.child_reaper import getChildReaper
-from xpra.exit_codes import EXIT_STR
+from xpra.exit_codes import exit_str
 from xpra.gtk_common.gtk_util import (
-    gtk_main, add_close_accel, pixbuf_new_from_file, TableBuilder, scaled_image, color_parse,
-    imagebutton, STATE_NORMAL, WIN_POS_CENTER,
+    add_close_accel, TableBuilder, scaled_image, color_parse,
+    imagebutton, get_icon_pixbuf,
     )
-from xpra.gtk_common.gobject_compat import (
-    import_gtk, import_gdk, import_pango, import_glib,
-    register_os_signals,
-    )
+from xpra.gtk_common.gobject_compat import register_os_signals
 from xpra.net.net_util import if_indextoname
 from xpra.util import typedict, DEFAULT_PORTS
 from xpra.os_util import bytestostr, WIN32
@@ -30,63 +32,72 @@ from xpra.log import Logger
 
 log = Logger("client", "util")
 
-gtk = import_gtk()
-gdk = import_gdk()
-pango = import_pango()
-glib = import_glib()
 
-
-class SessionsGUI(gtk.Window):
+class SessionsGUI(Gtk.Window):
 
     def __init__(self, options, title="Xpra Session Browser"):
-        gtk.Window.__init__(self)
+        super().__init__()
         self.exit_code = 0
         self.set_title(title)
         self.set_border_width(20)
         self.set_resizable(True)
+        self.set_default_size(800, 220)
         self.set_decorated(True)
-        self.set_size_request(440, 200)
-        self.set_position(WIN_POS_CENTER)
-        icon = self.get_pixbuf("xpra")
-        if icon:
-            self.set_icon(icon)
+        self.set_size_request(800, 220)
+        self.set_position(Gtk.WindowPosition.CENTER)
+        self.set_wmclass("xpra-sessions-gui", "Xpra-Sessions-GUI")
         add_close_accel(self, self.quit)
         self.connect("delete_event", self.quit)
+        icon = get_icon_pixbuf("browse.png")
+        if icon:
+            self.set_icon(icon)
+
+        hb = Gtk.HeaderBar()
+        hb.set_show_close_button(True)
+        hb.props.title = "Xpra"
+        button = Gtk.Button()
+        icon = Gio.ThemedIcon(name="help-about")
+        image = Gtk.Image.new_from_gicon(icon, Gtk.IconSize.BUTTON)
+        button.add(image)
+        button.set_tooltip_text("About")
+        button.connect("clicked", self.show_about)
+        hb.add(button)
+        hb.show_all()
+        self.set_titlebar(hb)
 
         self.clients = {}
         self.clients_disconnecting = set()
         self.child_reaper = getChildReaper()
 
-        self.vbox = gtk.VBox(False, 20)
+        self.vbox = Gtk.VBox(homogeneous=False, spacing=20)
         self.add(self.vbox)
 
-        title_label = gtk.Label(title)
-        title_label.modify_font(pango.FontDescription("sans 14"))
+        title_label = Gtk.Label(label=title)
+        title_label.modify_font(Pango.FontDescription("sans 14"))
         title_label.show()
         self.vbox.add(title_label)
 
-        self.warning = gtk.Label(" ")
+        self.warning = Gtk.Label(label=" ")
         red = color_parse("red")
-        self.warning.modify_fg(STATE_NORMAL, red)
+        self.warning.modify_fg(Gtk.StateType.NORMAL, red)
         self.warning.show()
         self.vbox.add(self.warning)
 
-        hbox = gtk.HBox(False, 10)
-        self.password_label = gtk.Label("Password:")
-        al = gtk.Alignment(xalign=1, yalign=0.5)
+        self.password_box = Gtk.HBox(homogeneous=False, spacing=10)
+        self.password_label = Gtk.Label(label="Password:")
+        al = Gtk.Alignment(xalign=1, yalign=0.5)
         al.add(self.password_label)
         al.show()
-        hbox.add(al)
-        self.password_entry = gtk.Entry()
+        self.password_box.add(al)
+        self.password_entry = Gtk.Entry()
         self.password_entry.set_max_length(128)
         self.password_entry.set_width_chars(16)
         self.password_entry.set_visibility(False)
-        al = gtk.Alignment(xalign=0, yalign=0.5)
+        al = Gtk.Alignment(xalign=0, yalign=0.5)
         al.add(self.password_entry)
         al.show()
-        hbox.add(al)
-        hbox.show()
-        self.vbox.add(hbox)
+        self.password_box.add(al)
+        self.vbox.add(self.password_box)
 
         self.table = None
         self.records = []
@@ -100,16 +111,16 @@ class SessionsGUI(gtk.Window):
         self.dotxpra = DotXpra(options.socket_dir, options.socket_dirs, username)
         self.poll_local_sessions()
         self.populate()
-        glib.timeout_add(5*1000, self.update)
+        GLib.timeout_add(5*1000, self.update)
         self.vbox.show()
         self.show()
 
-    def show(self):
-        self.show_all()
+    def show(self):  #pylint: disable=arguments-differ
+        super().show()
         def show():
             force_focus()
             self.present()
-        glib.idle_add(show)
+        GLib.idle_add(show)
 
     def quit(self, *args):
         log("quit%s", args)
@@ -118,7 +129,7 @@ class SessionsGUI(gtk.Window):
     def do_quit(self):
         log("do_quit()")
         self.cleanup()
-        gtk.main_quit()
+        Gtk.main_quit()
 
     def app_signal(self, signum):
         self.exit_code = 128 + signum
@@ -129,18 +140,17 @@ class SessionsGUI(gtk.Window):
         self.destroy()
 
 
+    def show_about(self, *_args):
+        from xpra.gtk_common.about import about
+        about()
+
+
     def update(self):
         if self.poll_local_sessions():
             self.populate()
         return True
 
     def populate(self):
-        if self.local_info_cache:
-            self.password_entry.show()
-            self.password_label.show()
-        else:
-            self.password_entry.hide()
-            self.password_label.hide()
         self.populate_table()
 
     def poll_local_sessions(self):
@@ -158,17 +168,27 @@ class SessionsGUI(gtk.Window):
                     #try to query it
                     try:
                         info = self.get_session_info(sockpath)
+                        if not info:
+                            log(" no data for '%s'", sockpath)
+                            continue
+                        if info.get("session-type")=="client":
+                            log(" skipped client socket '%s': %s", sockpath, info)
+                            continue
                     except Exception as e:
                         log("get_session_info(%s)", sockpath, exc_info=True)
                         log.error("Error querying session info for %s", sockpath)
-                        log.error(" %s", e)
+                        log.estr(e)
                         del e
                     if not info:
                         continue
                 #log("info(%s)=%s", sockpath, repr_ellipsized(str(info)))
                 info_cache[key] = info
+        if WIN32:
+            socktype = "namedpipe"
+        else:
+            socktype = "socket"
         def make_text(info):
-            text = {"mode" : "socket"}
+            text = {"mode" : socktype}
             for k, name in {
                 "platform"       : "platform",
                 "uuid"           : "uuid",
@@ -204,7 +224,7 @@ class SessionsGUI(gtk.Window):
         else:
             socktype = "socket"
         cmd = get_nodock_command()+["id", "%s:%s" % (socktype, sockpath)]
-        p = subprocess.Popen(cmd, stdin=None, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         stdout = p.communicate()[0]
         log("get_sessions_info(%s) returncode(%s)=%s", sockpath, cmd, p.returncode)
         if p.returncode!=0:
@@ -225,14 +245,18 @@ class SessionsGUI(gtk.Window):
             self.vbox.remove(self.table)
             self.table = None
         if not self.records:
-            self.table = gtk.Label("No sessions found")
+            self.table = Gtk.Label(label="No sessions found")
             self.vbox.add(self.table)
             self.table.show()
             self.set_size_request(440, 200)
+            self.password_box.hide()
             return
+        self.password_box.show()
         self.set_size_request(-1, -1)
         tb = TableBuilder(1, 6, False)
-        labels = [gtk.Label(x) for x in (
+        def l(s=""):
+            return Gtk.Label(label=s)
+        labels = [l(x) for x in (
             "Host", "Display", "Name", "Platform", "Type", "URI", "Connect", "Open in Browser",
             )]
         tb.add_row(*labels)
@@ -240,7 +264,7 @@ class SessionsGUI(gtk.Window):
         self.vbox.add(self.table)
         self.table.resize(1+len(self.records), 5)
         #group them by uuid
-        d = OrderedDict()
+        d = {}
         session_names = {}
         for i, record in enumerate(self.records):
             interface, protocol, name, stype, domain, host, address, port, text = record
@@ -248,11 +272,12 @@ class SessionsGUI(gtk.Window):
             log("populate_table: record[%i]=%s", i, record)
             uuid = td.strget("uuid", "")
             display = td.strget("display", "")
-            platform = td.strget("platform", "")
-            dtype = td.strget("type", "")
             if domain=="local" and host.endswith(".local"):
                 host = host[:-len(".local")]
-            key = (uuid, uuid or i, host, display, platform, dtype)
+            if uuid:
+                key = uuid
+            else:
+                key = (host.rstrip("."), display)
             log("populate_table: key[%i]=%s", i, key)
             d.setdefault(key, []).append((interface, protocol, name, stype, domain, host, address, port, text))
             #older servers expose the "session-name" as "session":
@@ -262,28 +287,40 @@ class SessionsGUI(gtk.Window):
                 session_names[key] = session_name
         for key, recs in d.items():
             if isinstance(key, tuple):
-                uuid, _, host, display, platform, dtype = key
+                host, display = key
             else:
-                display = key
-                uuid, host, platform, dtype = None, None, sys.platform, None
+                uuid = key
+                host, platform, dtype = None, sys.platform, None
+                #try to find a valid host name:
+                hosts = [rec[5] for rec in recs if not rec[5].startswith("local")]
+                if not hosts:
+                    hosts = [rec[5] for rec in recs]
+                host = hosts[0]
+            platform, dtype = None, None
+            for rec in recs:
+                td = typedict(rec[-1])
+                if not platform:
+                    platform = td.strget("platform", "")
+                if not dtype:
+                    dtype = td.strget("type", "")
             title = uuid
             if display:
                 title = display
-            label = gtk.Label(title)
+            label = l(title)
             if uuid!=title:
                 label.set_tooltip_text(uuid)
             #try to use an icon for the platform:
             platform_icon_name = self.get_platform_icon_name(platform)
             pwidget = None
             if platform_icon_name:
-                pwidget = scaled_image(self.get_pixbuf("%s.png" % platform_icon_name), 28)
+                pwidget = scaled_image(get_icon_pixbuf("%s.png" % platform_icon_name), 28)
                 if pwidget:
                     pwidget.set_tooltip_text(platform_icon_name)
             if not pwidget:
-                pwidget = gtk.Label(platform)
+                pwidget = l(platform)
             w, c, b = self.make_connect_widgets(key, recs, address, port, display)
             session_name = session_names.get(key, "")
-            tb.add_row(gtk.Label(host), label, gtk.Label(session_name), pwidget, gtk.Label(dtype), w, c, b)
+            tb.add_row(l(host), label, l(session_name), pwidget, l(dtype), w, c, b)
         self.table.show_all()
 
     def get_uri(self, password, interface, protocol, name, stype, domain, host, address, port, text):
@@ -337,16 +374,13 @@ class SessionsGUI(gtk.Window):
             if key in self.clients_disconnecting:
                 self.clients_disconnecting.remove(key)
             elif c not in (0, None):
-                self.warning.set_text(EXIT_STR.get(c, "exit code %s" % c).replace("_", " "))
-            try:
-                del self.clients[key]
-            except KeyError:
-                pass
-            else:
+                self.warning.set_text(exit_str(c).replace("_", " "))
+            client_proc = self.clients.pop(key, None)
+            if client_proc:
                 def update():
                     self.update()
                     self.populate()
-                glib.idle_add(update)
+                GLib.idle_add(update)
         self.child_reaper.add_process(proc, "client-%s" % uri, cmd, True, True, proc_exit)
         self.clients[key] = proc
         self.populate()
@@ -369,19 +403,19 @@ class SessionsGUI(gtk.Window):
         d = {}
         proc = self.clients.get(key)
         if proc and proc.poll() is None:
-            icon = self.get_pixbuf("disconnected.png")
+            icon = get_icon_pixbuf("disconnected.png")
             def disconnect_client(btn):
                 log("disconnect_client(%s) proc=%s", btn, proc)
                 self.clients_disconnecting.add(key)
                 proc.terminate()
                 self.populate()
             btn = imagebutton("Disconnect", icon, clicked_callback=disconnect_client)
-            return gtk.Label("Already connected with pid=%i" % proc.pid), btn, gtk.Label("")
+            return Gtk.Label(label="Already connected with pid=%i" % proc.pid), btn, Gtk.Label(label="")
 
-        icon = self.get_pixbuf("browser.png")
+        icon = get_icon_pixbuf("browser.png")
         bopen = imagebutton("Open", icon)
 
-        icon = self.get_pixbuf("connect.png")
+        icon = get_icon_pixbuf("connect.png")
         if len(recs)==1:
             #single record, single uri:
             rec = recs[0]
@@ -396,10 +430,10 @@ class SessionsGUI(gtk.Window):
                 uri = self.get_uri(password, *rec)
                 self.attach(key, uri)
             btn = imagebutton("Connect", icon, clicked_callback=clicked)
-            return gtk.Label(uri), btn, bopen
+            return Gtk.Label(label=uri), btn, bopen
 
         #multiple modes / uris
-        uri_menu = gtk.combo_box_new_text()
+        uri_menu = Gtk.ComboBoxText()
         uri_menu.set_size_request(340, 48)
         #sort by protocol so TCP comes first
         order = {"socket" : 0, "ssh" : 1, "tcp" :2, "ssl" : 3, "ws" : 4, "wss" : 8}
@@ -461,12 +495,6 @@ class SessionsGUI(gtk.Window):
                 return i
         return None
 
-    def get_pixbuf(self, icon_name):
-        icon_filename = os.path.join(get_icon_dir(), icon_name)
-        if os.path.exists(icon_filename):
-            return pixbuf_new_from_file(icon_filename)
-        return None
-
 
 def do_main(opts):
     from xpra.platform import program_context
@@ -475,16 +503,16 @@ def do_main(opts):
         enable_color()
         gui = SessionsGUI(opts)
         register_os_signals(gui.app_signal)
-        gtk_main()
+        Gtk.main()
         log("do_main() gui.exit_code=%i", gui.exit_code)
         return gui.exit_code
 
-def main():
+def main(): # pragma: no cover
     from xpra.scripts.config import make_defaults_struct
     opts = make_defaults_struct()
     return do_main(opts)
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     r = main()
     sys.exit(r)

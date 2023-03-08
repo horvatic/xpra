@@ -4,7 +4,7 @@
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
-from cairo import ImageSurface  #pylint: disable=no-name-in-module
+from cairo import ImageSurface, FORMAT_ARGB32  #pylint: disable=no-name-in-module
 from gi.repository import GLib              #@UnresolvedImport
 from gi.repository import GdkPixbuf         #@UnresolvedImport
 
@@ -47,32 +47,48 @@ class CairoBacking(CairoBackingBase):
             binfo = "ImageSurface(%i, %i)" % (b.get_width(), b.get_height())
         else:
             binfo = "None"
-        return "gtk3.CairoBacking(%s : size=%s)" % (binfo, self.size)
+        return "gtk3.CairoBacking(%s : size=%s, render_size=%s)" % (binfo, self.size, self.render_size)
 
-    def _do_paint_rgb(self, cairo_format, has_alpha, img_data, x, y, width, height, rowstride, options):
+    def _do_paint_rgb(self, cairo_format, has_alpha, img_data,
+                      x : int, y : int, width : int, height : int, render_width : int, render_height : int,
+                      rowstride : int, options):
         """ must be called from UI thread """
-        log("cairo._do_paint_rgb(%s, %s, %s %s, %s, %s, %s, %s, %s, %s) set_image_surface_data=%s, use pixbuf=%s",
-            FORMATS.get(cairo_format, cairo_format), has_alpha, len(img_data),
-            type(img_data), x, y, width, height,
-            rowstride, options, set_image_surface_data, CAIRO_USE_PIXBUF)
+        log("cairo._do_paint_rgb%s set_image_surface_data=%s, use pixbuf=%s",
+            (FORMATS.get(cairo_format, cairo_format), has_alpha, len(img_data),
+            type(img_data), x, y, width, height, render_width, render_height,
+            rowstride, options), set_image_surface_data, CAIRO_USE_PIXBUF)
         rgb_format = options.strget("rgb_format", "RGB")
         if set_image_surface_data and not CAIRO_USE_PIXBUF:
             rgb_formats = CAIRO_FORMATS.get(cairo_format)
             if rgb_format in rgb_formats:
                 img_surface = ImageSurface(cairo_format, width, height)
                 set_image_surface_data(img_surface, rgb_format, img_data, width, height, rowstride)
-                self.cairo_paint_surface(img_surface, x, y, width, height, options)
+                self.cairo_paint_surface(img_surface, x, y, render_width, render_height, options)
                 return True
             log("cannot set image surface data for cairo format %s and rgb_format %s (rgb formats supported: %s)",
-                cairo_format, rgb_format, rgb_formats)
+                FORMATS.get(cairo_format, cairo_format), rgb_format, rgb_formats)
 
         if rgb_format in ("RGB", "RGBA", "RGBX"):
             data = GLib.Bytes(img_data)
             pixbuf = GdkPixbuf.Pixbuf.new_from_bytes(data, GdkPixbuf.Colorspace.RGB,
                                                      has_alpha, 8, width, height, rowstride)
+            if render_width!=width or render_height!=height:
+                resample = options.strget("resample", "bilinear")
+                if resample=="NEAREST":
+                    interp_type = GdkPixbuf.InterpType.NEAREST
+                elif resample in ("BICUBIC", "LANCZOS"):
+                    interp_type = GdkPixbuf.InterpType.HYPER
+                else:
+                    interp_type = GdkPixbuf.InterpType.BILINEAR
+                log(f"scaling using {resample!r} from {width}x{height} to {render_width}x{render_height}")
+                pixbuf = pixbuf.scale_simple(render_width, render_height, interp_type)
             self.cairo_paint_pixbuf(pixbuf, x, y, options)
             return True
 
         img_data = memoryview(img_data)
         self.nasty_rgb_via_png_paint(cairo_format, has_alpha, img_data, x, y, width, height, rowstride, rgb_format)
         return True
+
+    def update_fps_buffer(self, width, height, pixels):
+        self.fps_image = ImageSurface(FORMAT_ARGB32, width, height)
+        set_image_surface_data(self.fps_image, "RGBA", pixels, width, height, width*4)

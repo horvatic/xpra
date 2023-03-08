@@ -1,44 +1,46 @@
-#!/usr/bin/env python
-# Copyright (C) 2017 Antoine Martin <antoine@xpra.org>
+#!/usr/bin/env python3
+# Copyright (C) 2017-2021 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
-import cairo
+from xpra.platform import program_context
+from xpra.platform.gui import force_focus
+from xpra.gtk_common.gtk_util import add_close_accel, get_icon_pixbuf
 
-from xpra.gtk_common.gobject_compat import import_gtk, is_gtk3
-from xpra.gtk_common.gtk_util import WIN_POS_CENTER, KEY_PRESS_MASK, add_close_accel
+from cairo import OPERATOR_SOURCE  #pylint: disable=no-name-in-module
+import gi
+gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
+from gi.repository import Gtk, Gdk, GLib
 
-gtk = import_gtk()
 
-
-class TransparentWindow(gtk.Window):
+class TransparentWindow(Gtk.Window):
 
     def __init__(self):
-        super(TransparentWindow, self).__init__()
-        self.set_position(WIN_POS_CENTER)
-        self.set_default_size(320, 320)
-        screen = self.get_screen()
+        super().__init__()
         self.set_title("Window Transparency")
+        self.set_position(Gtk.WindowPosition.CENTER)
+        self.set_default_size(320, 320)
+        icon = get_icon_pixbuf("windows.png")
+        if icon:
+            self.set_icon(icon)
+        screen = self.get_screen()
         visual = screen.get_rgba_visual()
-        if is_gtk3():
-            if visual and screen.is_composited():
-                self.set_visual(visual)
-            else:
-                print("transparency not available!")
+        if visual and screen.is_composited():
+            self.set_visual(visual)
         else:
-            colormap = screen.get_rgba_colormap()
-            if colormap:
-                self.set_colormap(colormap)
-            else:
-                print("transparency not available!")
+            print("transparency not available!")
         self.set_app_paintable(True)
-        self.set_events(KEY_PRESS_MASK)
-        if is_gtk3():
-            self.connect("draw", self.area_draw)
-        else:
-            self.connect("expose-event", self.do_expose_event)
-        self.connect("destroy", gtk.main_quit)
+        self.set_events(Gdk.EventMask.KEY_PRESS_MASK)
+        drawing_area = Gtk.DrawingArea()
+        drawing_area.connect("draw", self.area_draw)
+        self.add(drawing_area)
+        self.connect("destroy", Gtk.main_quit)
+
+    def show_with_focus(self):
+        force_focus()
         self.show_all()
+        super().present()
 
     def do_expose_event(self, *_args):
         cr = self.get_window().cairo_create()
@@ -46,36 +48,34 @@ class TransparentWindow(gtk.Window):
 
     def area_draw(self, widget, cr):
         cr.set_source_rgba(1.0, 1.0, 1.0, 0.0) # Transparent
-
         # Draw the background
-        cr.set_operator(cairo.OPERATOR_SOURCE)
+        cr.set_operator(OPERATOR_SOURCE)
         cr.paint()
-
         # Draw a circle
-        (width, height) = widget.get_size()
+        alloc = widget.get_allocated_size()[0]
+        width, height = alloc.width, alloc.height
         cr.set_source_rgba(1.0, 0.2, 0.2, 0.6)
-        # Python <2.4 doesn't have conditional expressions
-        if width < height:
-            radius = float(width)/2 - 0.8
-        else:
-            radius = float(height)/2 - 0.8
-
-        cr.arc(float(width)/2, float(height)/2, radius, 0, 2.0*3.14)
+        radius = min(width, height)/2 - 0.8
+        cr.arc(width/2, height/2, radius, 0, 2.0*3.14)
         cr.fill()
         cr.stroke()
 
+
 def main():
     from xpra.platform.gui import init, set_default_icon
-    set_default_icon("encoding.png")
-    init()
-    import signal
-    def signal_handler(*_args):
-        gtk.main_quit()
-    signal.signal(signal.SIGINT, signal_handler)
-    w = TransparentWindow()
-    add_close_accel(w, gtk.main_quit)
-    gtk.main()
-    return 0
+    with program_context("transparent-window", "Transparent Window"):
+        set_default_icon("windows.png")
+        init()
+
+        from xpra.gtk_common.gobject_compat import register_os_signals
+        def signal_handler(*_args):
+            Gtk.main_quit()
+        register_os_signals(signal_handler)
+        w = TransparentWindow()
+        add_close_accel(w, Gtk.main_quit)
+        GLib.idle_add(w.show_with_focus)
+        Gtk.main()
+        return 0
 
 
 if __name__ == "__main__":
