@@ -1,6 +1,6 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # This file is part of Xpra.
-# Copyright (C) 2011-2019 Antoine Martin <antoine@xpra.org>
+# Copyright (C) 2011-2023 Antoine Martin <antoine@xpra.org>
 # Xpra is released under the terms of the GNU GPL v2, or, at your option, any
 # later version. See the file COPYING for details.
 
@@ -9,6 +9,8 @@ import math
 import ctypes
 import struct
 import weakref
+
+from gi.repository import GLib      #@UnresolvedImport
 import objc                         #@UnresolvedImport
 import Quartz                       #@UnresolvedImport
 import Quartz.CoreGraphics as CG    #@UnresolvedImport
@@ -20,8 +22,8 @@ from Quartz.CoreGraphics import (
     CGDisplayRegisterReconfigurationCallback,   #@UnresolvedImport
     CGDisplayRemoveReconfigurationCallback,     #@UnresolvedImport
     )
-from AppKit import NSAppleEventManager, NSScreen, NSObject, NSBeep   #@UnresolvedImport
 from AppKit import (
+    NSObject, NSAppleEventManager, NSScreen, NSBeep,   #@UnresolvedImport
     NSApp, NSApplication, NSWorkspace,              #@UnresolvedImport
     NSWorkspaceActiveSpaceDidChangeNotification,    #@UnresolvedImport
     NSWorkspaceWillSleepNotification,               #@UnresolvedImport
@@ -32,9 +34,9 @@ from Foundation import (
     NSUserNotificationDefaultSoundName,             #@UnresolvedImport
     )
 
-from xpra.os_util import PYTHON2
 from xpra.util import envbool, envint, roundup
 from xpra.notifications.notifier_base import NotifierBase
+from xpra.platform.darwin import get_OSXApplication
 from xpra.log import Logger
 
 log = Logger("osx", "events")
@@ -47,8 +49,9 @@ SLEEP_HANDLER = envbool("XPRA_OSX_SLEEP_HANDLER", True)
 EVENT_LISTENER = envbool("XPRA_OSX_EVENT_LISTENER", True)
 OSX_WHEEL_MULTIPLIER = envint("XPRA_OSX_WHEEL_MULTIPLIER", 100)
 OSX_WHEEL_PRECISE_MULTIPLIER = envint("XPRA_OSX_WHEEL_PRECISE_MULTIPLIER", 1)
+OSX_WHEEL_DIVISOR = envint("XPRA_OSX_WHEEL_DIVISOR", 10)
 WHEEL = envbool("XPRA_WHEEL", True)
-NATIVE_NOTIFIER = envbool("XPRA_OSX_NATIVE_NOTIFIER", False)
+NATIVE_NOTIFIER = envbool("XPRA_OSX_NATIVE_NOTIFIER", True)
 SUBPROCESS_NOTIFIER = envbool("XPRA_OSX_SUBPROCESS_NOTIFIER", False)
 
 ALPHA = {
@@ -64,35 +67,9 @@ ALPHA = {
 try:
     Carbon_ctypes = ctypes.CDLL("/System/Library/Frameworks/Carbon.framework/Carbon")
     GetDblTime = Carbon_ctypes.GetDblTime
-except:
+except Exception:
+    log("GetDblTime not found", exc_info=True)
     GetDblTime = None
-
-
-exit_cb = None
-def quit_handler(*_args):
-    global exit_cb
-    if exit_cb:
-        exit_cb()
-    else:
-        from xpra.gtk_common.quit import gtk_main_quit_really
-        gtk_main_quit_really()
-    return True
-
-def set_exit_cb(ecb):
-    global exit_cb
-    exit_cb = ecb
-
-
-macapp = None
-def get_OSXApplication():
-    global macapp
-    if macapp is None:
-        import gi
-        gi.require_version('GtkosxApplication', '1.0')
-        from gi.repository import GtkosxApplication
-        macapp = GtkosxApplication.Application()
-        macapp.connect("NSApplicationWillTerminate", quit_handler)
-    return macapp
 
 
 def do_init():
@@ -111,7 +88,10 @@ def do_init():
     mh = getOSXMenuHelper(None)
     log("do_init() menu helper=%s", mh)
     osxapp.set_dock_menu(mh.build_dock_menu())
-    osxapp.set_menu_bar(mh.rebuild())
+    import warnings
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*invalid cast from 'GtkMenuBar'")
+        osxapp.set_menu_bar(mh.rebuild())
 
 
 def do_ready():
@@ -124,66 +104,57 @@ def do_ready():
 class OSX_Notifier(NotifierBase):
 
     def __init__(self, closed_cb=None, action_cb=None):
-        NotifierBase.__init__(self, closed_cb, action_cb)
+        super().__init__(closed_cb, action_cb)
+        self.gtk_notifier = None
+        self.gtk_notifications = set()
         self.notifications = {}
         self.notification_center = NSUserNotificationCenter.defaultUserNotificationCenter()
         assert self.notification_center
 
-    def show_notify(self, dbus_id, tray, nid, app_name, replaces_nid, app_icon, summary, body, actions, hints, expire_timeout, icon):
-        notification = NSUserNotification.alloc().init()
+    def show_notify(self, dbus_id, tray, nid, app_name, replaces_nid, app_icon,
+                    summary, body, actions, hints, expire_timeout, icon):
+        GTK_NOTIFIER = envbool("XPRA_OSX_GTK_NOTIFIER", True)
+        if actions and GTK_NOTIFIER:
+            #try to use GTK notifier if we have actions buttons to handle:
+            try:
+                from xpra.gtk_common.gtk_notifier import GTK_Notifier
+            except ImportError as e:
+                log("cannot use GTK notifier for handling actions: %s", e)
+            else:
+                self.gtk_notifier = GTK_Notifier(self.closed_cb, self.action_cb)
+                self.gtk_notifier.show_notify(dbus_id, tray, nid, app_name, replaces_nid, app_icon,
+                                              summary, body, actions, hints, expire_timeout, icon)
+                self.gtk_notifications.add(nid)
+                return
+        GLib.idle_add(self.do_show_notify, dbus_id, tray, nid, app_name, replaces_nid, app_icon, summary, body, actions, hints, expire_timeout, icon)
+
+    def do_show_notify(self, dbus_id, tray, nid, app_name, replaces_nid, app_icon,
+                       summary, body, actions, hints, expire_timeout, icon):
+        notification = NSUserNotification.alloc()
+        notification.init()
         notification.setTitle_(summary)
         notification.setInformativeText_(body)
         notification.setIdentifier_("%s" % nid)
         #enable sound:
         notification.setSoundName_(NSUserNotificationDefaultSoundName)
-        notifylog("show_notify(..) nid=%s, %s(%s)", nid, self.notification_center.deliverNotification_, notification)
+        notifylog("do_show_notify(..) nid=%s, %s(%s)", nid, self.notification_center.deliverNotification_, notification)
         self.notifications[nid] = notification
         self.notification_center.deliverNotification_(notification)
 
     def close_notify(self, nid):
-        notification = self.notifications.get(nid)
-        notifylog("close_notify(..) notification[%i]=%s", nid, notification)
-        if notification:
-            self.notification_center.removeDeliveredNotification_(notification)
+        try:
+            self.gtk_notifications.remove(nid)
+        except KeyError:
+            notification = self.notifications.get(nid)
+            notifylog("close_notify(..) notification[%i]=%s", nid, notification)
+            if notification:
+                GLib.idle_add(self.notification_center.removeDeliveredNotification_, notification)
+        else:
+            self.gtk_notifier.close_notify(nid)
 
     def cleanup(self):
-        NotifierBase.cleanup(self)
-        self.notification_center.removeAllDeliveredNotifications()
-
-
-class OSX_Subprocess_Notifier(NotifierBase):
-    def show_notify(self, dbus_id, tray, nid, app_name, replaces_nid, app_icon, summary, body, actions, hints, expire_timeout, icon):
-        from xpra.platform.darwin import osx_notifier
-        osx_notifier_file = osx_notifier.__file__
-        if osx_notifier_file.endswith("pyc"):
-            osx_notifier_file = osx_notifier_file[:-1]
-        import time
-        #osx_notifier_file = "/Users/osx/osx_notifier.py"
-        from xpra.platform.paths import get_app_dir
-        base = get_app_dir()
-        #python_bin = "/usr/bin/python"
-        python_bin = os.path.join(base, "Resources", "bin", "python")
-        cmd = [python_bin, osx_notifier_file, "%s-%s" % (int(time.time()), nid), summary, body]
-        from xpra.child_reaper import getChildReaper
-        import subprocess
-        env = os.environ.copy()
-        for x in ("DYLD_LIBRARY_PATH", "XDG_CONFIG_DIRS", "XDG_DATA_DIRS",
-                  "GTK_DATA_PREFIX", "GTK_EXE_PREFIX", "GTK_PATH",
-                  "GTK2_RC_FILES", "GTK_IM_MODULE_FILE", "GDK_PIXBUF_MODULE_FILE",
-                  "PANGO_RC_FILE", "PANGO_LIBDIR", "PANGO_SYSCONFDIR",
-                  "CHARSETALIASDIR",
-                  "GST_BUNDLE_CONTENTS", "PYTHON", "PYTHONHOME",
-                  "PYTHONPATH"):
-            if x in env:
-                del env[x]
-        notifylog("running %s with env=%s", cmd, env)
-        proc = subprocess.Popen(cmd, env=env)
-        proc.wait()
-        notifylog("returned %i", proc.poll())
-        getChildReaper().add_process(proc, "notifier-%s" % nid, cmd, True, True)
-
-    def close_notify(self, nid):
-        pass
+        super().cleanup()
+        GLib.idle_add(self.notification_center.removeAllDeliveredNotifications)
 
 
 def get_clipboard_native_class():
@@ -194,8 +165,6 @@ def get_native_notifier_classes():
     v = []
     if NATIVE_NOTIFIER and NSUserNotificationCenter.defaultUserNotificationCenter():
         v.append(OSX_Notifier)
-    if SUBPROCESS_NOTIFIER:
-        v.append(OSX_Subprocess_Notifier)
     notifylog("get_native_notifier_classes()=%s", v)
     return v
 
@@ -228,7 +197,7 @@ def get_double_click_time():
         #(but still call it "Time" you see)
         MS_PER_TICK = 1000.0/60
         return int(GetDblTime() * MS_PER_TICK)
-    except:
+    except Exception:
         return -1
 
 
@@ -259,7 +228,7 @@ def get_window_frame_size(x, y, w, h):
                 "offset"    : (dx+dw//2, dy+dh),
                 "frame"     : (dx+dw//2, dx+dw//2, dy+dh, dy),
                 }
-    except:
+    except Exception:
         log("failed to query frame size using Quartz, using hardcoded value", exc_info=True)
         return {            #left, right, top, bottom:
                 "offset"    : (0, 22),
@@ -281,11 +250,7 @@ def get_workareas():
         frame = screen.frame()
         visibleFrame = screen.visibleFrame()
         log(" frame=%s, visibleFrame=%s", frame, visibleFrame)
-        try:
-            #10.7 onwards:
-            log(" backingScaleFactor=%s", screen.backingScaleFactor())
-        except:
-            pass
+        log(" backingScaleFactor=%s", screen.backingScaleFactor())
         x = int(visibleFrame.origin.x - frame.origin.x)
         y = int((frame.size.height - visibleFrame.size.height) - (visibleFrame.origin.y - frame.origin.y))
         w = int(visibleFrame.size.width)
@@ -456,33 +421,13 @@ def get_info():
     i = get_info_base()
     try:
         i["displays"] = get_displays_info()
-    except:
+    except Exception:
         log.error("Error: OSX get_display_info failed", exc_info=True)
     return i
 
 
 #keep track of the window object for each view
 VIEW_TO_WINDOW = weakref.WeakValueDictionary()
-
-def add_window_hooks(window):
-    if WHEEL and PYTHON2:
-        global VIEW_TO_WINDOW
-        try:
-            gdkwin = window.get_window()
-            VIEW_TO_WINDOW[gdkwin.nsview] = window
-        except:
-            log("add_window_hooks(%s)", window, exc_info=True)
-            log.error("Error: failed to associate window %s with its nsview", window, exc_info=True)
-
-def remove_window_hooks(window):
-    if WHEEL and PYTHON2:
-        global VIEW_TO_WINDOW
-        #this should be redundant as we use weak references:
-        try:
-            gdkwin = window.get_window()
-            del VIEW_TO_WINDOW[gdkwin.nsview]
-        except:
-            pass
 
 
 def get_CG_imagewrapper(rect=None):
@@ -527,16 +472,7 @@ def take_screenshot():
 
 def force_focus(duration=2000):
     enable_focus_workaround()
-    from gi.repository import GLib                  #@UnresolvedImport
     GLib.timeout_add(duration, disable_focus_workaround)
-
-
-def show_with_focus_workaround(show_cb):
-    from xpra.gtk_common.gobject_compat import import_glib
-    from gi.repository import GLib                  #@UnresolvedImport
-    enable_focus_workaround()
-    show_cb()
-    GLib.timeout_add(500, disable_focus_workaround)
 
 
 __osx_open_signal = False
@@ -548,9 +484,7 @@ def add_open_handlers(open_file_cb, open_url_cb):
     assert open_file_cb and open_url_cb
 
     def idle_add(fn, *args):
-        from xpra.gtk_common.gobject_compat import import_glib
-        glib = import_glib()
-        glib.idle_add(fn, *args)
+        GLib.idle_add(fn, *args)
 
     def open_URL(url):
         global __osx_open_signal
@@ -570,8 +504,6 @@ def add_open_handlers(open_file_cb, open_url_cb):
 
 def wait_for_open_handlers(show_cb, open_file_cb, open_url_cb, delay=OPEN_SIGNAL_WAIT):
     assert show_cb and open_file_cb and open_url_cb
-    from xpra.gtk_common.gobject_compat import import_glib
-    glib = import_glib()
 
     add_open_handlers(open_file_cb, open_url_cb)
     def may_show():
@@ -580,7 +512,7 @@ def wait_for_open_handlers(show_cb, open_file_cb, open_url_cb, delay=OPEN_SIGNAL
         if not __osx_open_signal:
             force_focus()
             show_cb()
-    glib.timeout_add(delay, may_show)
+    GLib.timeout_add(delay, may_show)
 
 def register_file_handler(handler):
     log("register_file_handler(%s)", handler)
@@ -588,7 +520,7 @@ def register_file_handler(handler):
         get_OSXApplication().connect("NSApplicationOpenFile", handler)
     except Exception as e:
         log.error("Error: cannot handle file associations:")
-        log.error(" %s", e)
+        log.estr(e)
 
 def register_URL_handler(handler):
     log("register_URL_handler(%s)", handler)
@@ -613,15 +545,13 @@ def register_URL_handler(handler):
         )
 
 
-class Delegate(NSObject):
-    def applicationDidFinishLaunching_(self, notification):
-        log("applicationDidFinishLaunching_(%s)", notification)
-        if SLEEP_HANDLER:
-            self.register_sleep_handlers()
-        if WHEEL and PYTHON2:
-            from xpra.platform.darwin.gdk_bindings import init_quartz_filter, set_wheel_event_handler   #@UnresolvedImport
-            set_wheel_event_handler(self.wheel_event_handler)
-            init_quartz_filter()
+class AppDelegate(NSObject):
+
+    def init(self):
+        super().init()
+        self.callbacks = {}
+        self.workspace = None
+        self.notificationCenter = None
 
     @objc.python_method
     def wheel_event_handler(self, nsview, deltax, deltay, precise):
@@ -637,7 +567,7 @@ class Delegate(NSObject):
                 m = OSX_WHEEL_PRECISE_MULTIPLIER
             else:
                 m = OSX_WHEEL_MULTIPLIER
-            v = abs(distance)/10.0*m
+            v = m*abs(distance)/OSX_WHEEL_DIVISOR
             if v>1:
                 #cancel out some of the crazy fast scroll acceleration from macos:
                 v = math.sqrt(v)
@@ -651,7 +581,9 @@ class Delegate(NSObject):
         if dx!=0 or dy!=0:
             client = window._client
             wid = window._id
-            client.wheel_event(wid, dx, dy)
+            pointer = window.get_mouse_position()
+            device_id = -1
+            client.wheel_event(device_id, wid, dx, dy, pointer)
         return True
 
     @objc.python_method
@@ -666,12 +598,14 @@ class Delegate(NSObject):
         add_observer(self.receiveWakeNotification_, NSWorkspaceDidWakeNotification)
         add_observer(self.receiveWorkspaceChangeNotification_, NSWorkspaceActiveSpaceDidChangeNotification)
 
+
     @objc.signature(b'B@:#B')
     def applicationShouldHandleReopen_hasVisibleWindows_(self, ns_app, flag):
         log("applicationShouldHandleReopen_hasVisibleWindows%s", (ns_app, flag))
-        self.delegate_cb("deiconify_callback")
+        self.delegate_cb("deiconify")
         return True
 
+    @objc.signature(b'v@:I')
     def receiveWorkspaceChangeNotification_(self, aNotification):
         workspacelog("receiveWorkspaceChangeNotification_(%s)", aNotification)
         if not CGWindowListCopyWindowInfo:
@@ -688,32 +622,33 @@ class Delegate(NSObject):
                     our_windows[num] = name
             workspacelog("workspace change - our windows on screen: %s", our_windows)
             if our_windows:
-                self.delegate_cb("wake_callback")
+                self.delegate_cb("wake")
             else:
-                self.delegate_cb("sleep_callback")
-        except:
+                self.delegate_cb("sleep")
+        except Exception:
             workspacelog.error("Error querying workspace info", exc_info=True)
 
     #def application_openFile_(self, application, fileName):
     #    log.warn("application_openFile_(%s, %s)", application, fileName)
-
+    @objc.signature(b'v@:I')
     def receiveSleepNotification_(self, aNotification):
         log("receiveSleepNotification_(%s) sleep_callback=%s", aNotification, self.sleep_callback)
-        self.delegate_cb("sleep_callback")
+        self.delegate_cb("sleep")
 
+    @objc.signature(b'v@:I')
     def receiveWakeNotification_(self, aNotification):
         log("receiveWakeNotification_(%s)", aNotification)
-        self.delegate_cb("wake_callback")
+        self.delegate_cb("wake")
 
     @objc.python_method
     def delegate_cb(self, name):
         #find the named callback and call it
-        callback = getattr(self, name, None)
+        callback = self.callbacks.get(name)
         log("delegate_cb(%s)=%s", name, callback)
         if callback:
             try:
                 callback()
-            except:
+            except Exception:
                 log.error("Error in %s callback %s", name, callback, exc_info=True)
 
 
@@ -728,16 +663,20 @@ def can_access_display() -> bool:
     d = Quartz.CGSessionCopyCurrentDictionary()
     if not d:
         return False
-    if d.get("kCGSSessionOnConsoleKey", 0)==0:
+    kCGSSessionOnConsoleKey = d.get("kCGSSessionOnConsoleKey", 0)
+    log("kCGSSessionOnConsoleKey=%s", kCGSSessionOnConsoleKey)
+    if kCGSSessionOnConsoleKey==0:
         #GUI session doesn't own the console, or the console's screens are asleep
         return False
-    if d.get("CGSSessionScreenIsLocked", 0):
+    CGSSessionScreenIsLocked = d.get("CGSSessionScreenIsLocked", 0)
+    log("CGSSessionScreenIsLocked=%s", CGSSessionScreenIsLocked)
+    if CGSSessionScreenIsLocked:
         #screen is locked
         return False
     return True
 
 
-class ClientExtras(object):
+class ClientExtras:
     def __init__(self, client=None, opts=None):
         if OSX_FOCUS_WORKAROUND and client:
             def first_ui_received(*_args):
@@ -750,6 +689,8 @@ class ClientExtras(object):
         self.event_loop_started = False
         self.check_display_timer = 0
         self.display_is_asleep = False
+        self.shared_app = None
+        self.delegate = None
         if opts and client:
             log("setting swap_keys=%s using %s", swap_keys, client.keyboard_helper)
             if client.keyboard_helper and client.keyboard_helper.keyboard:
@@ -779,24 +720,21 @@ class ClientExtras(object):
         if EVENT_LISTENER:
             try:
                 self.setup_event_listener()
-            except:
+            except Exception:
                 log.error("Error setting up OSX event listener", exc_info=True)
 
     def setup_event_listener(self):
-        log("setup_event_listener()")
-        if NSObject is object:
-            log.warn("NSObject is missing, not setting up OSX event listener")
-            return
-        self.shared_app = None
-        self.delegate = None
         self.shared_app = NSApplication.sharedApplication()
-
-        self.delegate = Delegate.alloc().init()
+        log(f"setup_event_listener() delegate={self.delegate}, shared app={self.shared_app}")
+        self.delegate = AppDelegate.alloc()
+        self.delegate.init()
         self.delegate.retain()
-        if self.client:
-            self.delegate.sleep_callback = self.client.suspend
-            self.delegate.wake_callback = self.client.resume
-            self.delegate.deiconify_callback = self.client.deiconify_windows
+        if self.client and False:
+            self.delegate.callbacks.update({
+                "sleep" : self.client.suspend,
+                "wake" : self.client.resume,
+                "deiconify" : self.client.deiconify,
+                })
         self.shared_app.setDelegate_(self.delegate)
         log("setup_event_listener() the application delegate has been registered")
         r = CGDisplayRegisterReconfigurationCallback(self.display_change, self)
@@ -856,6 +794,8 @@ def main():
     with program_context("OSX Extras"):
         log.enable_debug()
         ce = ClientExtras(None, None)
+        ce.check_display()
+        ce.ready()
         ce.run()
 
 

@@ -115,6 +115,7 @@ class UIXpraClient(ClientBaseClass):
         self.server_session_name = None
 
         self.window_configure_pointer = True
+        self.send_download_request = None
 
         #features:
         self.opengl_enabled = False
