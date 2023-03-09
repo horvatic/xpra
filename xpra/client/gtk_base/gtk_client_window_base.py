@@ -249,10 +249,6 @@ class GTKClientWindowBase(ClientWindowBase, Gtk.Window):
     #maximum size of the backing pixel buffer:
     MAX_BACKING_DIMS = 16*1024, 16*1024
 
-    def __init__(self, *args, **kwargs):
-        ClientWindowBase.__init__(self, *args, **kwargs)
-        #Gtk.Window.__init__() is called from do_init_window()
-
     def init_window(self, metadata):
         self.init_max_window_size()
         if self._is_popup(metadata):
@@ -260,10 +256,10 @@ class GTKClientWindowBase(ClientWindowBase, Gtk.Window):
         else:
             window_type = Gtk.WindowType.TOPLEVEL
         self.on_realize_cb = {}
-        self.do_init_window(window_type)
+        Gtk.Window.__init__(self, type = window_type)
+        self.set_app_paintable(True)
         self.init_drawing_area()
         self.set_decorated(self._is_decorated(metadata))
-        self.set_app_paintable(True)
         self._window_state = {}
         self._resize_counter = 0
         self._can_set_workspace = HAS_X11_BINDINGS and CAN_SET_WORKSPACE
@@ -295,10 +291,22 @@ class GTKClientWindowBase(ClientWindowBase, Gtk.Window):
 
     def init_drawing_area(self):
         widget = Gtk.DrawingArea()
+        widget.set_app_paintable(True)
+        widget.set_size_request(*self._size)
         widget.show()
         self.drawing_area = widget
         self.init_widget_events(widget)
         self.add(widget)
+
+    def repaint(self, x, y, w, h):
+        if OSX:
+            self.queue_draw_area(x, y, w, h)
+            return
+        widget = self.drawing_area
+        #log("repaint%s widget=%s", (x, y, w, h), widget)
+        if widget:
+            widget.queue_draw_area(x, y, w, h)
+
 
     def get_window_event_mask(self):
         mask = WINDOW_EVENT_MASK
@@ -307,7 +315,7 @@ class GTKClientWindowBase(ClientWindowBase, Gtk.Window):
         return mask
 
     def init_widget_events(self, widget):
-        widget.add_events(WINDOW_EVENT_MASK)
+        widget.add_events(self.get_window_event_mask())
         def motion(_w, event):
             self._do_motion_notify_event(event)
             return True
@@ -323,7 +331,17 @@ class GTKClientWindowBase(ClientWindowBase, Gtk.Window):
         def scroll(_w, event):
             self._do_scroll_event(event)
             return True
+        def configure_event(_w, event):
+            geomlog("widget configure_event: new size=%ix%i", event.width, event.height)
+        widget.connect("configure-event", configure_event)
         widget.connect("scroll-event", scroll)
+        #widget.connect("draw", self.draw_widget)
+
+    def draw_widget(self, widget, context):
+        raise NotImplementedError()
+
+    def get_drawing_area_geometry(self):
+        raise NotImplementedError()
 
 
     ######################################################################
@@ -703,6 +721,50 @@ class GTKClientWindowBase(ClientWindowBase, Gtk.Window):
                     geomlog("setup_window() adjusted initial position=%s", self._pos)
         self.move(x, y)
 
+
+    def finalize_window(self):
+        #find a parent window we should follow when it moves:
+        follow = self._client.find_window(self._metadata, "transient-for") or self._client.find_window(self._metadata, "parent")
+        log("finalize_window() follow=%s", follow)
+        if not follow:
+            return
+        type_hint = self.get_type_hint()
+        log("finalize_window() type_hint=%s, FOLLOW_WINDOW_TYPES=%s", type_hint, FOLLOW_WINDOW_TYPES)
+        if not self._override_redirect and type_hint not in FOLLOW_WINDOW_TYPES:
+            return
+        def follow_configure_event(window, event):
+            follow = self._follow
+            rp = self._follow_position
+            log("follow_configure_event(%s, %s) follow=%s, relative position=%s",
+                     window, event, follow, rp)
+            if not follow or not rp:
+                return
+            fpos = getattr(follow, "_pos", None)
+            log("follow_configure_event: %s moved to %s", follow, fpos)
+            if not fpos:
+                return
+            fx, fy = fpos
+            rx, ry = rp
+            x, y = self.get_position()
+            newx, newy = fx + follow.sx(rx), fy + follow.sy(ry)
+            log("follow_configure_event: new position from %s: %s", self._pos, (newx, newy))
+            if newx!=x or newy!=y:
+                #don't update the relative position on the next configure event,
+                #since we're generating it
+                self._follow_configure = monotonic(), (newx, newy)
+                self.move(newx, newy)
+            return True
+        self.cancel_follow_handler()
+        self._follow = follow
+        def follow_unmapped(window):
+            log("follow_unmapped(%s)", window)
+            self._follow = None
+            self.cancel_follow_handler()
+        follow.connect("unmap", follow_unmapped)
+        self._follow_handler = follow.connect_after("configure-event", follow_configure_event)
+        log("finalize_window() following %s", follow)
+
+
     def cancel_follow_handler(self):
         f = self._follow
         fh = self._follow_handler
@@ -862,17 +924,19 @@ class GTKClientWindowBase(ClientWindowBase, Gtk.Window):
         #by default, only RGB (no transparency):
         #rgb_formats = tuple(BACKING_CLASS.RGB_MODES)
         self._client_properties["encodings.rgb_formats"] = ["RGB", "RGBX"]
-        if not self._has_alpha or not bc.HAS_ALPHA:
-            self._client_properties["encoding.transparency"] = False
-            return
-        if self._has_alpha and not self.is_realized():
-            if enable_alpha(self):
-                self._client_properties["encodings.rgb_formats"] = ["RGBA", "RGB", "RGBX"]
-                self._window_alpha = True
+        #only set the visual if we need to enable alpha:
+        #(breaks the headerbar otherwise!)
+        if not self.get_realized() and self._has_alpha:
+            if set_visual(self, True):
+                if self._has_alpha:
+                    self._client_properties["encodings.rgb_formats"] = ["RGBA", "RGB", "RGBX"]
+                self._window_alpha = self._has_alpha
             else:
-                alphalog("enable_alpha()=False")
+                alphalog("failed to set RGBA visual")
                 self._has_alpha = False
                 self._client_properties["encoding.transparency"] = False
+        if not self._has_alpha or not bc.HAS_ALPHA:
+            self._client_properties["encoding.transparency"] = False
 
 
     def freeze(self):
@@ -925,7 +989,7 @@ class GTKClientWindowBase(ClientWindowBase, Gtk.Window):
                 self.window_offset, (w, h), (ww, wh))
             if self._backing.offsets!=(0, 0, 0, 0):
                 self.center_backing(w, h)
-                self.queue_draw_area(0, 0, ww, wh)
+                self.repaint(0, 0, ww, wh)
         #decide if this is really an update by comparing with our local state vars:
         #(could just be a notification of a state change we already know about)
         actual_updates = {}
@@ -961,7 +1025,7 @@ class GTKClientWindowBase(ClientWindowBase, Gtk.Window):
                         return
                     ww, wh = self.get_size()
                     #this should work for the non-opengl case:
-                    self.queue_draw_area(0, 0, ww, wh)
+                    self.repaint(0, 0, ww, wh)
                 self.timeout_add(REPAINT_MAXIMIZED, repaint_maximized)
             if REFRESH_MAXIMIZED:
                 self._client.send_refresh(self._id)
@@ -1609,12 +1673,12 @@ class GTKClientWindowBase(ClientWindowBase, Gtk.Window):
         if value:
             #repaint the scale value (in window coordinates):
             x, y, w, h = abs_coords(*value[2:5])
-            self.queue_draw_area(x, y, w, h)
+            self.repaint(x, y, w, h)
             #clear it shortly after:
             self.schedule_remove_pointer_overlay()
         if prev:
             x, y, w, h = abs_coords(*prev[2:5])
-            self.queue_draw_area(x, y, w, h)
+            self.repaint(x, y, w, h)
 
     def schedule_remove_pointer_overlay(self, delay=CURSOR_IDLE_TIMEOUT*1000):
         mouselog(f"schedule_remove_pointer_overlay({delay})")
@@ -2061,8 +2125,8 @@ class GTKClientWindowBase(ClientWindowBase, Gtk.Window):
         self._set_backing_size(w, h)
         self.send_configure_event()
         if self._backing and not self._iconified:
-            geomlog("configure event: size unchanged, queueing redraw")
-            self.queue_draw_area(0, 0, w, h)
+            geomlog("configure event: queueing redraw")
+            self.repaint(0, 0, w, h)
 
     def send_configure_event(self, skip_geometry=False):
         assert skip_geometry or not self.is_OR()
@@ -2102,7 +2166,10 @@ class GTKClientWindowBase(ClientWindowBase, Gtk.Window):
         if max(bw, bh)>=32000:
             raise Exception("invalid window backing size %ix%i" % (bw, bh))
         if b:
+            prev_render_size = b.render_size
             b.init(ww, wh, bw, bh)
+            if prev_render_size!=b.render_size:
+                self._client_properties["encoding.render-size"] = b.render_size
         else:
             self.new_backing(bw, bh)
 
@@ -2113,7 +2180,7 @@ class GTKClientWindowBase(ClientWindowBase, Gtk.Window):
         self._resize_counter = resize_counter
         if (w, h)==(ww, wh):
             self._backing.offsets = 0, 0, 0, 0
-            self.queue_draw_area(0, 0, w, h)
+            self.repaint(0, 0, w, h)
             return
         if not self._fullscreen and not self._maximized:
             Gtk.Window.resize(self, w, h)
@@ -2123,7 +2190,8 @@ class GTKClientWindowBase(ClientWindowBase, Gtk.Window):
             self.center_backing(w, h)
         geomlog("backing offsets=%s, window offset=%s", self._backing.offsets, self.window_offset)
         self._set_backing_size(w, h)
-        self.queue_draw_area(0, 0, ww, wh)
+        self.repaint(0, 0, ww, wh)
+        self.may_send_client_properties()
 
     def center_backing(self, w, h):
         ww, wh = self.get_size()
@@ -2223,6 +2291,8 @@ class GTKClientWindowBase(ClientWindowBase, Gtk.Window):
         window.move_resize(ax, ay, w, h)
         #re-init the backing with the new size
         self._set_backing_size(w, h)
+        self.repaint(0, 0, w, h)
+        self.may_send_client_properties()
 
 
     def noop_destroy(self):

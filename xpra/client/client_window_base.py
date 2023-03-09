@@ -91,6 +91,7 @@ class ClientWindowBase(ClientWidgetBase):
         self.init_window(metadata)
         self.setup_window(bw, bh)
         self.update_metadata(metadata)
+        self.finalize_window()
 
     def __repr__(self):
         return f"ClientWindow({self._id})"
@@ -119,6 +120,10 @@ class ClientWindowBase(ClientWidgetBase):
         sc = typedict(metadata.dictget("size-constraints", {}))
         self.window_gravity = OVERRIDE_GRAVITY or sc.intget("gravity", DEFAULT_GRAVITY)
         self.set_decorated(metadata.boolget("decorations", True))
+
+    def finalize_window(self):
+        pass
+
 
     def get_info(self):
         attributes = []
@@ -203,6 +208,8 @@ class ClientWindowBase(ClientWidgetBase):
         self._backing.border = self.border
         self._backing.default_cursor_data = self.default_cursor_data
         self._backing.gravity = self.window_gravity
+        #this is only used by cairo to request a repaint for the fps counter:
+        self._backing.repaint = self.repaint
         return self._backing._backing
 
 
@@ -787,7 +794,11 @@ class ClientWindowBase(ClientWidgetBase):
         if b:
             b.toggle()
             log("magic_key%s border=%s", args, b)
-            self.queue_draw_area(0, 0, *self._size)
+            self.repaint(0, 0, *self._size)
+
+    def repaint(self, x, y, w, h):
+        self.queue_draw_area(0, 0, *self._size)
+        #raise NotImplementedError("no repaint on %s" % type(self))
 
     def refresh_window(self, *args):
         log("refresh_window(%s) wid=%s", args, self._id)
@@ -823,27 +834,6 @@ class ClientWindowBase(ClientWidgetBase):
         backing = self._backing
         if not backing:
             return
-        if backing.repaint_all or self._client.xscale!=1 or self._client.yscale!=1 or is_Wayland():
-            #easy: just repaint the whole window:
-            rw, rh = self.get_size()
-            self.idle_add(self.queue_draw_area, 0, 0, rw, rh)
-            return
-        pr = self.pending_refresh
-        self.pending_refresh = []
-        for x, y, w, h in pr:
-            rx, ry, rw, rh = self._client.srect(x, y, w, h)
-            if self.window_offset:
-                rx += self.window_offset[0]
-                ry += self.window_offset[1]
-            self.idle_add(self.queue_draw_area, rx, ry, rw, rh)
-
-
-    def after_draw_refresh_new(self, success, message=""):
-        plog("after_draw_refresh(%s, %s) pending_refresh=%s",
-             success, message, self.pending_refresh)
-        backing = self._backing
-        if not backing:
-            return
         if backing.repaint_all or self._xscale!=1 or self._yscale!=1 or is_Wayland():
             #easy: just repaint the whole window:
             rw, rh = self.get_size()
@@ -871,7 +861,7 @@ class ClientWindowBase(ClientWidgetBase):
         #with normal windows, we just queue a draw request
         #and let the expose event paint the spinner
         w, h = self.get_size()
-        self.queue_draw_area(0, 0, w, h)
+        self.repaint(0, 0, w, h)
 
     def can_have_spinner(self):
         if self._backing is None:

@@ -8,6 +8,7 @@ from collections import namedtuple
 
 from xpra.client.gtk3.gtk3_client_window import GTK3ClientWindow
 from xpra.client.gl.gtk3.gl_client_window_common import GLClientWindowCommon
+from xpra.gtk_common.gtk_util import set_visual
 from xpra.util import typedict, envbool
 from xpra.log import Logger
 
@@ -18,31 +19,14 @@ DrawEvent = namedtuple("DrawEvent", "area")
 
 MONITOR_REINIT = envbool("XPRA_OPENGL_MONITOR_REINIT", False)
 
+
 class GLClientWindowBase(GLClientWindowCommon, GTK3ClientWindow):
 
-    def set_alpha(self):
-        GTK3ClientWindow.set_alpha(self)
-        rgb_formats = self._client_properties.get("encodings.rgb_formats", [])
-        GLClientWindowCommon.add_rgb_formats(self, rgb_formats)
+    def __repr__(self):
+        return "GLClientWindow(%s : %s)" % (self._id, self._backing)
 
-    def do_configure_event(self, event):
-        log("GL do_configure_event(%s)", event)
-        GTK3ClientWindow.do_configure_event(self, event)
-        self._backing.paint_screen = True
-
-    def destroy(self):
-        self.remove_backing()
-        GTK3ClientWindow.destroy(self)
-
-    def new_backing(self, bw, bh):
-        widget = GTK3ClientWindow.new_backing(self, bw, bh)
-        if self.drawing_area:
-            self.remove(self.drawing_area)
-        self.init_widget_events(widget)
-        self.add(widget)
-        self.drawing_area = widget
-        #maybe redundant?:
-        self.apply_geometry_hints(self.geometry_hints)
+    def get_backing_class(self):
+        raise NotImplementedError()
 
     def is_GL(self):
         return True
@@ -73,6 +57,22 @@ class GLClientWindowBase(GLClientWindowCommon, GTK3ClientWindow):
             w, h = self.get_size()
             self.new_backing(w, h)
 
+
+    def remove_backing(self):
+        b = self._backing
+        log("remove_backing() backing=%s", b)
+        if b:
+            self._backing = None
+            b.paint_screen = False
+            b.close()
+            glarea = b._backing
+            log("remove_backing() glarea=%s", glarea)
+            if glarea:
+                try:
+                    self.remove(glarea)
+                except Exception:
+                    log.warn("Warning: cannot remove %s", glarea, exc_info=True)
+
     def magic_key(self, *args):
         b = self._backing
         if self.border:
@@ -96,4 +96,38 @@ class GLClientWindowBase(GLClientWindowCommon, GTK3ClientWindow):
         #TODO: we could handle BGRX as BGRA too...
         #rgb_formats.append("BGRX")
 
+    def do_configure_event(self, event):
+        log("GL do_configure_event(%s)", event)
+        GTK3ClientWindow.do_configure_event(self, event)
+        self._backing.paint_screen = True
 
+    def destroy(self):
+        self.remove_backing()
+        super().destroy()
+
+    def new_backing(self, bw, bh):
+        widget = super().new_backing(bw, bh)
+        if self.drawing_area:
+            self.remove(self.drawing_area)
+        set_visual(widget, self._has_alpha)
+        widget.show()
+        self.init_widget_events(widget)
+        if self.drawing_area and self.size_constraints:
+            #apply min size to the drawing_area:
+            thints = typedict(self.size_constraints)
+            minsize = thints.intpair("minimum-size", (0, 0))
+            self.drawing_area.set_size_request(*minsize)
+        self.add(widget)
+        self.drawing_area = widget
+        #maybe redundant?:
+        self.apply_geometry_hints(self.geometry_hints)
+
+    def draw_widget(self, widget, context):
+        log("draw_widget(%s, %s)", widget, context)
+        if not self.get_mapped():
+            return False
+        backing = self._backing
+        if not backing:
+            return False
+        backing.draw_fbo(context)
+        return True

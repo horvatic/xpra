@@ -15,7 +15,6 @@ from xpra.util import envbool, typedict
 from xpra.os_util import bytestostr, is_gnome
 from xpra.log import Logger
 
-log = Logger("gtk", "window")
 paintlog = Logger("paint")
 metalog = Logger("metadata")
 geomlog = Logger("geometry")
@@ -52,13 +51,6 @@ class GTK3ClientWindow(GTKClientWindowBase):
             h = self._icon_size()
             pixbuf = pixbuf.scale_simple(h, h, GdkPixbuf.InterpType.HYPER)
             hbi.set_from_pixbuf(pixbuf)
-
-    def do_init_window(self, window_type):
-        Gtk.Window.__init__(self, type = window_type)
-
-    def init_widget_events(self, widget):
-        GTKClientWindowBase.init_widget_events(self, widget)
-        widget.connect("draw", self.drawing_area_draw)
 
     def can_use_header_bar(self, metadata):
         if self.is_OR() or not self.get_decorated():
@@ -144,9 +136,6 @@ class GTK3ClientWindow(GTKClientWindowBase):
         except Exception as e:
             metalog.error("xget_u32_property error on %s / %s: %s", target, name, e)
 
-    def is_mapped(self):
-        return self.get_mapped()
-
     def get_drawing_area_geometry(self):
         gdkwindow = self.drawing_area.get_window()
         if gdkwindow:
@@ -215,30 +204,17 @@ class GTK3ClientWindow(GTKClientWindowBase):
         dw, dh = geom[2], geom[3]
         return dw<maxw and dh<maxh
 
-    def queue_draw_area(self, x, y, width, height):
-        window = self.get_window()
-        if not window:
-            log.warn("Warning: ignoring draw packet,")
-            log.warn(" received for a window which is not realized yet or gone already")
-            return
-        rect = Gdk.Rectangle()
-        rect.x = x
-        rect.y = y
-        rect.width = width
-        rect.height = height
-        self.drawing_area.get_window().invalidate_rect(rect, False)
-
-    def do_draw(self, context):
-        paintlog("do_draw(%s)", context)
-        Gtk.Window.do_draw(self, context)
-
-    def drawing_area_draw(self, widget, context):
-        paintlog("drawing_area_draw(%s, %s)", widget, context)
+    def draw_widget(self, widget, context):
+        paintlog("draw_widget(%s, %s)", widget, context)
+        if not self.get_mapped():
+            return False
         backing = self._backing
-        if self.get_mapped() and backing:
-            self.paint_backing_offset_border(backing, context)
-            self.clip_to_backing(backing, context)
-            backing.cairo_draw(context)
+        if not backing:
+            return False
+        self.paint_backing_offset_border(backing, context)
+        self.clip_to_backing(backing, context)
+        backing.cairo_draw(context)
         self.cairo_paint_border(context, None)
         if not self._client.server_ok():
             self.paint_spinner(context)
+        return True
