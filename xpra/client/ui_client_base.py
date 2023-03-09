@@ -141,7 +141,6 @@ class UIXpraClient(ClientBaseClass):
         self.request_start = []
         self.request_start_child = []
         self.headerbar = None
-        self.window_configure_pointer = True
 
         #in WindowClient - should it be?
         #self.server_is_desktop = False

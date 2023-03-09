@@ -206,8 +206,8 @@ class WindowClient(StubClientMixin):
         self.modal_windows = self.windows_enabled and opts.modal_windows
 
         self.border_str = opts.border
-        #if opts.border:
-            #self.parse_border()
+        if opts.border:
+            self.parse_border()
 
         #mouse wheel:
         mw = (opts.mousewheel or "").lower().replace("-", "").split(",")
@@ -843,7 +843,8 @@ class WindowClient(StubClientMixin):
                 window = cwc(self, group_leader_window, watcher_pid, wid,
                              wx, wy, ww, wh, bw, bh,
                              metadata, override_redirect, client_properties,
-                             border, self.max_window_size, self.default_cursor_data, self.pixel_depth)
+                             border, self.max_window_size, self.default_cursor_data, self.pixel_depth,
+                             self.headerbar)
                 break
             except Exception:
                 log.warn("failed to instantiate %s", cwc, exc_info=True)

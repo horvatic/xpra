@@ -24,15 +24,15 @@ log = Logger("osx", "tray", "menu")
 clipboardlog = Logger("osx", "menu", "clipboard")
 
 #control which menus are shown in the OSX global menu:
-SHOW_FEATURES_MENU = False
-SHOW_SOUND_MENU = False
-SHOW_ENCODINGS_MENU = False
-SHOW_ACTIONS_MENU = False
-SHOW_INFO_MENU = False
-SHOW_CLIPBOARD_MENU = False
-SHOW_SERVER_MENU = False
+SHOW_FEATURES_MENU = True
+SHOW_SOUND_MENU = True
+SHOW_ENCODINGS_MENU = True
+SHOW_ACTIONS_MENU = True
+SHOW_INFO_MENU = True
+SHOW_CLIPBOARD_MENU = True
+SHOW_SERVER_MENU = True
 
-SHOW_ABOUT_XPRA = False
+SHOW_ABOUT_XPRA = True
 
 SINGLE_MENU = envbool("XPRA_OSX_SINGLE_MENU", False)
 USE_WINDOW_MENU = envbool("XPRA_OSX_USE_WINDOW_MENU", True)

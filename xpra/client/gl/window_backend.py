@@ -32,8 +32,6 @@ def get_gl_client_window_module(force_enable=False):
         return opengl_props, nativegl_client_window
     return {}, None
 
-def noop(*_args):
-    pass
 def no_scaling(*args):
     if len(args)==1:
         return args[0]
@@ -70,20 +68,12 @@ class FakeClient(AdHocStruct):
         self.server_window_frame_extents = False
         self.server_readonly = False
         self.server_pointer = False
-        self.window_configure_pointer = True
         self.update_focus = noop
         self.handle_key_action = noop
         self.window_ungrab = noop
         self.idle_add = no_idle_add
         self.timeout_add = no_timeout_add
         self.source_remove = no_source_remove
-        self.wheel_smooth = False
-        self.pointer_grabbed = False
-
-    def find_window(self, *args):
-        return None
-    def window_ungrab(self, *args):
-        pass
 
     def send(self, *args):
         log("send%s", args)
