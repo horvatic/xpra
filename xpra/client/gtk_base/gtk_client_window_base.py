@@ -335,7 +335,7 @@ class GTKClientWindowBase(ClientWindowBase, Gtk.Window):
             geomlog("widget configure_event: new size=%ix%i", event.width, event.height)
         widget.connect("configure-event", configure_event)
         widget.connect("scroll-event", scroll)
-        #widget.connect("draw", self.draw_widget)
+        widget.connect("draw", self.draw_widget)
 
     def draw_widget(self, widget, context):
         raise NotImplementedError()
@@ -1024,7 +1024,6 @@ class GTKClientWindowBase(ClientWindowBase, Gtk.Window):
                     if not self._backing:
                         return
                     ww, wh = self.get_size()
-                    #this should work for the non-opengl case:
                     self.repaint(0, 0, ww, wh)
                 self.timeout_add(REPAINT_MAXIMIZED, repaint_maximized)
             if REFRESH_MAXIMIZED:

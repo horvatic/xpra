@@ -7,7 +7,6 @@
 from collections import namedtuple
 
 from xpra.client.gtk3.gtk3_client_window import GTK3ClientWindow
-from xpra.client.gl.gtk3.gl_client_window_common import GLClientWindowCommon
 from xpra.gtk_common.gtk_util import set_visual
 from xpra.util import typedict, envbool
 from xpra.log import Logger
@@ -20,7 +19,7 @@ DrawEvent = namedtuple("DrawEvent", "area")
 MONITOR_REINIT = envbool("XPRA_OPENGL_MONITOR_REINIT", False)
 
 
-class GLClientWindowBase(GLClientWindowCommon, GTK3ClientWindow):
+class GLClientWindowBase(GTK3ClientWindow):
 
     def __repr__(self):
         return "GLClientWindow(%s : %s)" % (self._id, self._backing)
@@ -42,6 +41,13 @@ class GLClientWindowBase(GLClientWindowCommon, GTK3ClientWindow):
         if b._backing and b.paint_screen:
             w, h = self.get_size()
             self.repaint(0, 0, w, h)
+
+    def queue_draw_area(self, x, y, w, h):
+        b = self._backing
+        if not b:
+            return
+        rect = (x, y, w, h)
+        b.gl_expose_rect(rect)
 
     def monitor_changed(self, monitor):
         super().monitor_changed(monitor)
